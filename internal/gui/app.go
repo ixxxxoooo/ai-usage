@@ -49,6 +49,7 @@ type App struct {
 	pop   *mygo.Window
 	panel *mygo.Window
 	ui    uiState
+	hk    hooks // 可替换的外部交互（文件对话框、异步执行），测试时注入
 
 	// 供 onChange 在其他 goroutine 里安全读取窗口指针。
 	winMu sync.Mutex
@@ -283,6 +284,9 @@ func (a *App) OpenPanel(page string) {
 	a.ClosePopover()
 	if page != "" {
 		a.ui.page = page
+	}
+	if a.ui.page == PageSettings {
+		a.loadSettingsDraft()
 	}
 	if a.panel != nil {
 		a.panel.Show()
