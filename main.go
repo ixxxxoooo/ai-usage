@@ -1,0 +1,86 @@
+// AI Usage：macOS 菜单栏 AI 账单用量工具（MyGo 原生 UI）。
+//
+// 环境变量：
+//
+//	AIUSAGE_DATA_DIR  指定数据目录（测试/E2E 用；设置后凭据改存该目录下的文件而不是钥匙串）
+//
+// @author ygw
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+	"path/filepath"
+
+	"github.com/egoist/mygo"
+	"github.com/liwenjiao/ai-usage/internal/gui"
+	"github.com/liwenjiao/ai-usage/internal/secret"
+	"github.com/liwenjiao/ai-usage/internal/service"
+	"github.com/liwenjiao/ai-usage/internal/store"
+)
+
+// dataDir 返回数据目录：优先环境变量，否则 ~/Library/Application Support/AI Usage。
+//
+// 返回值：目录路径与是否为测试目录（测试目录下凭据不进钥匙串）。
+func dataDir() (string, bool) {
+	if d := os.Getenv("AIUSAGE_DATA_DIR"); d != "" {
+		return d, true
+	}
+	d, err := mygo.App.Path(mygo.PathUserData)
+	if err != nil || d == "" {
+		home, _ := os.UserHomeDir()
+		d = filepath.Join(home, "Library", "Application Support", "AI Usage")
+	}
+	return d, false
+}
+
+// run 完成初始化并进入事件循环。
+//
+// 返回值：运行期错误。
+func run() error {
+	mygo.App.SetName("AI Usage")
+	if !mygo.App.RequestSingleInstanceLock() {
+		return nil // 已有实例在运行：参数已转交，本进程直接退出
+	}
+	dir, isTest := dataDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	st, err := store.Open(filepath.Join(dir, "usage.db"))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	var secrets secret.Store = secret.Keychain{}
+	if isTest {
+		secrets = &secret.File{Path: filepath.Join(dir, "secrets.json")}
+	}
+
+	app := gui.New()
+	svc, err := service.New(service.Config{
+		Store: st, Secrets: secrets,
+		OnChange: app.OnChange, Notify: app.Notify,
+	})
+	if err != nil {
+		return err
+	}
+	app.Attach(svc)
+
+	mygo.App.OnSecondInstance(func([]string, string) { app.OpenPanel(gui.PageOverview) })
+	mygo.App.WhenReady(func() {
+		if err := app.Start(); err != nil {
+			log.Fatal("创建托盘失败: ", err)
+		}
+		svc.Start(context.Background())
+	})
+	return mygo.App.Run()
+}
+
+// main 程序入口。
+func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
