@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/egoist/mygo"
 	"github.com/liwenjiao/ai-usage/internal/gui"
@@ -40,8 +41,9 @@ func dataDir() (string, bool) {
 // 返回值：运行期错误。
 func run() error {
 	mygo.App.SetName("AI Usage")
-	if !mygo.App.RequestSingleInstanceLock() {
-		return nil // 已有实例在运行：参数已转交，本进程直接退出
+	self := parseSelfTest(os.Args[1:])
+	if self.mode == "" && !mygo.App.RequestSingleInstanceLock() {
+		return nil // 已有实例在运行：参数已转交，本进程直接退出（自检模式不占用单实例锁）
 	}
 	dir, isTest := dataDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -74,8 +76,36 @@ func run() error {
 			log.Fatal("创建托盘失败: ", err)
 		}
 		svc.Start(context.Background())
+		if self.mode != "" {
+			app.RunSelfTest(self.mode, self.out, self.bounds)
+		}
 	})
 	return mygo.App.Run()
+}
+
+// selfTest 是命令行自检参数（供 E2E 脚本使用）。
+type selfTest struct{ mode, out, bounds string }
+
+// parseSelfTest 解析 --selftest=模式 --selftest-out=路径 --selftest-bounds=x,y,w,h。
+//
+// 参数 args：命令行参数（不含程序名）。
+// 返回值：解析结果；没有 --selftest 时 mode 为空。
+func parseSelfTest(args []string) selfTest {
+	var s selfTest
+	for _, a := range args {
+		switch {
+		case strings.HasPrefix(a, "--selftest="):
+			s.mode = strings.TrimPrefix(a, "--selftest=")
+		case strings.HasPrefix(a, "--selftest-out="):
+			s.out = strings.TrimPrefix(a, "--selftest-out=")
+		case strings.HasPrefix(a, "--selftest-bounds="):
+			s.bounds = strings.TrimPrefix(a, "--selftest-bounds=")
+		}
+	}
+	if s.mode != "" && s.out == "" {
+		s.out = filepath.Join(os.TempDir(), "aiusage-selftest.json")
+	}
+	return s
 }
 
 // main 程序入口。
