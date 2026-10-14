@@ -96,8 +96,17 @@ jobs:
           DATA="$(mktemp -d)"
           export AIUSAGE_DATA_DIR="$DATA"
           # 自检模式会在真实窗口里打开浮窗并校验位置，写出 JSON 报告后自行退出
-          timeout 90 "$MNT/AI Usage.app/Contents/MacOS/AI Usage" \
-            --selftest=position --selftest-out="$DATA/position.json" || true
+          # macOS 没有 timeout 命令：放到后台运行，最多等待 90 秒
+          "$MNT/AI Usage.app/Contents/MacOS/AI Usage" \
+            --selftest=position --selftest-out="$DATA/position.json" \
+            > "$DATA/app.log" 2>&1 &
+          APP_PID=$!
+          for _ in $(seq 1 90); do
+            kill -0 "$APP_PID" 2>/dev/null || break
+            sleep 1
+          done
+          kill "$APP_PID" 2>/dev/null || true
+          echo "---- 应用输出 ----"; cat "$DATA/app.log" || true
           test -f "$DATA/position.json" || { echo "没有生成自检报告：应用没有正常启动"; exit 1; }
           cat "$DATA/position.json"
           python3 - "$DATA/position.json" <<'PY'
