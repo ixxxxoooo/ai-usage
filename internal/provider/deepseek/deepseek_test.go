@@ -305,3 +305,35 @@ func TestFindChromeTokens(t *testing.T) {
 		t.Errorf("空: %v %v", toks, err)
 	}
 }
+
+// TestNormalizeToken 验证各种粘贴形态都能整理成纯 token，Cookie 会被拒绝。
+func TestNormalizeToken(t *testing.T) {
+	tok := "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/abcdefgh=="
+	ok := map[string]string{
+		tok:                            tok,
+		"  " + tok + "\n":              tok,
+		"Bearer " + tok:                tok,
+		"authorization: Bearer " + tok: tok,
+		"-H 'authorization: Bearer " + tok + "' \\": tok,
+		`{"value":"` + tok + `","__version":"0"}`:   tok,
+		`"` + tok + `"`: tok,
+		"curl 'https://x' -H 'accept: */*' -H 'authorization: Bearer " + tok + "' -b 'a=b'": tok,
+	}
+	for in, want := range ok {
+		if got, err := NormalizeToken(in); err != nil || got != want {
+			t.Errorf("%q → %q, %v", in, got, err)
+		}
+	}
+	if got, err := NormalizeToken("  "); got != "" || err != nil {
+		t.Errorf("空串: %q %v", got, err)
+	}
+	for _, bad := range []string{
+		"deviceId=0123456789abcdef0123456789abcdef0123456789abcdef; SESSTIME=1700000000000",
+		"deviceId=0123456789abcdef0123456789abcdef0123456789abcdef",
+		"short1", "has space inside the token value 1234567890",
+	} {
+		if _, err := NormalizeToken(bad); !errors.Is(err, ErrBadToken) {
+			t.Errorf("应拒绝 %q：%v", bad, err)
+		}
+	}
+}

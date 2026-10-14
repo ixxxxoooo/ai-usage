@@ -47,33 +47,55 @@ const (
 // 参数 appSupport：Application Support 目录（为空则取 $HOME/Library/Application Support）。
 // 返回值：找到的 token 列表（可能多个 Profile）；没有找到返回空切片，不视为错误。
 func FindChromeTokens(appSupport string) ([]ChromeToken, error) {
+	toks, _, err := ScanChromeTokens(appSupport)
+	return toks, err
+}
+
+// ScanChromeTokens 同 FindChromeTokens，但额外返回每个 Profile 的扫描记录，方便排查"为什么没找到"。
+//
+// 记录形如 "Chrome/Default：找到 token"、"Chrome/Profile 1：没有 DeepSeek 登录"、
+// "Chrome：无法读取目录（operation not permitted）"。记录里不含 token。
+//
+// 参数 appSupport：Application Support 目录（为空则取 $HOME/Library/Application Support）。
+// 返回值：token 列表、扫描记录、错误（仅在拿不到用户目录时）。
+func ScanChromeTokens(appSupport string) ([]ChromeToken, []string, error) {
 	if appSupport == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		appSupport = filepath.Join(home, "Library", "Application Support")
 	}
 	var out []ChromeToken
+	var notes []string
 	for _, b := range chromeBrowserDirs {
 		root := filepath.Join(appSupport, filepath.FromSlash(b.Dir))
 		profiles, err := os.ReadDir(root)
 		if err != nil {
+			if !os.IsNotExist(err) {
+				notes = append(notes, fmt.Sprintf("%s：无法读取目录（%v）", b.Name, err))
+			}
 			continue
 		}
 		for _, p := range profiles {
 			if !p.IsDir() || !(p.Name() == "Default" || strings.HasPrefix(p.Name(), "Profile ")) {
 				continue
 			}
+			label := b.Name + "/" + p.Name()
 			dir := filepath.Join(root, p.Name(), "Local Storage", "leveldb")
 			tok, err := ReadTokenFromLevelDB(dir)
-			if err != nil || tok == "" {
-				continue
+			switch {
+			case err != nil:
+				notes = append(notes, fmt.Sprintf("%s：读取失败（%v）", label, err))
+			case tok == "":
+				notes = append(notes, label+"：没有 DeepSeek 登录")
+			default:
+				notes = append(notes, label+"：找到 token")
+				out = append(out, ChromeToken{Browser: b.Name, Profile: p.Name(), Token: tok})
 			}
-			out = append(out, ChromeToken{Browser: b.Name, Profile: p.Name(), Token: tok})
 		}
 	}
-	return out, nil
+	return out, notes, nil
 }
 
 // ReadTokenFromLevelDB 从一个 Chromium localStorage leveldb 目录里读取 DeepSeek userToken。

@@ -2,6 +2,19 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.0.1] - 2026-10-15
+
+### 修复
+
+- DeepSeek 一直显示「未登录」：macOS 不允许从 Finder 启动的应用读取 Chrome 数据目录（`operation not permitted`），现在会明确提示并在设置页提供「打开隐私设置」入口。
+- 多个浏览器 / Profile 里有过期登录时，只取第一个会误判为登录过期；现在会依次尝试所有候选，直到有一个可用。
+
+### 改进
+
+- 手动粘贴 token 更宽容：支持 `Bearer xxx`、整行 `authorization: …`、localStorage 的 JSON；粘成 Cookie 时给出明确提示。
+- 设置页说明改为「不需要 Cookie，复制 authorization: Bearer 后的 token」。
+- 新增 `--selftest=deepseek` 与 [DeepSeek 登录说明](docs/DEEPSEEK_AUTH.md)，可在真实应用进程里排查登录获取。
+
 ## [1.0.0] - 2026-10-15
 
 首个正式版本。
@@ -19,4 +32,5 @@
 - 开机自启、浅色 / 深色自适应、毛玻璃。
 - 通用（Intel + Apple 芯片）DMG 安装包；GitHub Actions 持续集成与自动发布。
 
+[1.0.1]: https://github.com/ixxxxoooo/ai-usage/releases/tag/v1.0.1
 [1.0.0]: https://github.com/ixxxxoooo/ai-usage/releases/tag/v1.0.0

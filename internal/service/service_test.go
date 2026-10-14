@@ -738,3 +738,65 @@ func TestFirstSyncCycleThenHistory(t *testing.T) {
 		t.Errorf("增量刷新应只请求 1 次，实际 %d", n)
 	}
 }
+
+// TestMultiCandidateTokens 浏览器里第一个 Profile 的 token 已过期时，应继续尝试后面的候选。
+func TestMultiCandidateTokens(t *testing.T) {
+	h := newHarness(t)
+	h.mu.Lock()
+	h.chrome = []deepseek.ChromeToken{
+		{Browser: "Chrome", Profile: "Default", Token: "tok-stale"},
+		{Browser: "Chrome", Profile: "Profile 1", Token: "tok-chrome"},
+	}
+	h.mu.Unlock()
+	h.ds.mu.Lock()
+	h.ds.validTok = "tok-chrome"
+	h.ds.mu.Unlock()
+	h.svc.RefreshAll(context.Background())
+	d := h.svc.State().DeepSeek
+	if d.Status != StatusOK || d.TokenSrc != "Chrome / Profile 1" {
+		t.Fatalf("应改用第二个候选: %s src=%q", d.Status.StatusText(), d.TokenSrc)
+	}
+}
+
+// TestBrowserDeniedMessage 被 macOS 拒绝读取浏览器目录时，提示里要说明如何授权。
+func TestBrowserDeniedMessage(t *testing.T) {
+	h := newHarness(t)
+	h.mu.Lock()
+	h.chrome = nil
+	h.mu.Unlock()
+	svc, err := New(Config{
+		Store: h.st, Secrets: h.secrets,
+		Cursor:        &cursor.Client{BaseURL: h.cur.URL},
+		DS:            &deepseek.Client{APIBase: h.ds.URL, PlatformBase: h.ds.URL},
+		ChromeTokens:  func() ([]deepseek.ChromeToken, error) { return nil, nil },
+		BrowserDenied: func() bool { return true },
+		Now:           func() time.Time { return fixedNow },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.RefreshAll(context.Background())
+	d := svc.State().DeepSeek
+	if d.Status != StatusNoCreds || !strings.Contains(d.Message, "完全磁盘访问权限") {
+		t.Errorf("提示不对: %s %q", d.Status.StatusText(), d.Message)
+	}
+}
+
+// TestSaveTokenNormalizes 手动保存 token 时兼容 Bearer/请求头写法，并拒绝 Cookie。
+func TestSaveTokenNormalizes(t *testing.T) {
+	h := newHarness(t)
+	long := "tok-chrome-0123456789abcdef"
+	if err := h.svc.SaveSecret(secret.KeyDeepSeekToken, "authorization: Bearer "+long); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := h.secrets.Get(secret.KeyDeepSeekToken); v != long {
+		t.Errorf("应只保存纯 token: %q", v)
+	}
+	err := h.svc.SaveSecret(secret.KeyDeepSeekToken, "deviceId=0123456789abcdef0123456789abcdef; HWWAFSESID=a7e49a")
+	if err == nil || !strings.Contains(err.Error(), "Cookie") {
+		t.Errorf("Cookie 应被拒绝: %v", err)
+	}
+	if v, _ := h.secrets.Get(secret.KeyDeepSeekToken); v != long {
+		t.Errorf("被拒绝后不应覆盖原值: %q", v)
+	}
+}

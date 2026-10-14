@@ -16,6 +16,7 @@ AI Usage 是一个 **纯本地** 的桌面应用：没有自己的服务端，�
 
 - **Cursor 登录状态**：以只读方式打开 `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`，只取出访问令牌用于调用接口。该文件不会被复制或修改。
 - **浏览器 localStorage**（仅「自动读取 DeepSeek 登录」时）：扫描 Chrome / Edge / Brave / Arc / Vivaldi / Chromium 各 Profile 里 `https://platform.deepseek.com` 的 `userToken`。为避免与浏览器抢文件锁，先把 leveldb 目录 **复制到系统临时目录**、只读打开、读完立即删除；浏览器原始数据从不被修改。
+- 读取需要 macOS「完全磁盘访问权限」；未授权时读取会被系统拒绝，应用只会提示，不会绕过。详见 [DEEPSEEK_AUTH.md](DEEPSEEK_AUTH.md)。
 - 若不想让应用读取浏览器，可在「设置 → DeepSeek」选择「手动粘贴 token」，应用就不会扫描浏览器。
 
 ## 它会保存什么

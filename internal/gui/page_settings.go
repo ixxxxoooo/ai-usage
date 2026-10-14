@@ -2,6 +2,7 @@ package gui
 
 import (
 	"fmt"
+	"os/exec"
 	"slices"
 
 	"github.com/egoist/mygo"
@@ -231,8 +232,15 @@ func (a *App) deepseekSettings(c *ui.Context) {
 		settingBlock(c, "平台登录（账单与今日 Token）", "账单接口需要网页登录信息。自动方式会只读地从 Chrome 读取，不会修改浏览器数据", func() {
 			ui.Segmented(c.Key("set-dsauth"), &u.dsAuth, authLabelsD...).Label("DeepSeek 平台登录方式")
 		})
+		if u.dsAuth == 0 {
+			settingBlock(c, "自动读取需要授权", "macOS 默认不允许应用读取 Chrome 的数据。若这里一直显示「未登录」，请在「完全磁盘访问权限」里允许 AI Usage 并重启；也可以改用「手动粘贴 token」", func() {
+				if ui.Button(c.Key("set-open-fda"), "打开隐私设置").Clicked() {
+					openPrivacySettings()
+				}
+			})
+		}
 		if u.dsAuth == 1 {
-			settingBlock(c, "平台 token", "在 platform.deepseek.com 的开发者工具中，复制 localStorage 里 userToken 的 value", func() {
+			settingBlock(c, "平台 token", "不需要 Cookie。登录 platform.deepseek.com 后，按 F12 → Network，点开任一 api/v0 请求，复制请求头 authorization: Bearer 后面的那一串（或 Application → Local Storage 里 userToken 的 value）。直接粘贴整行 authorization 也可以", func() {
 				ui.Column(c).Gap(6).Children(func() {
 					a.secretInput(c, "set-dstoken", "DeepSeek 平台 token", "粘贴 token", &u.tokenInput, secret.KeyDeepSeekToken, u.hasToken)
 					secretStatus(c, u.hasToken, u.maskToken)
@@ -383,4 +391,11 @@ func (a *App) settingsDialogs(c *ui.Context) {
 		"将删除本机保存的 Cursor 明细与 DeepSeek 账单。清除前会自动备份，钥匙串里的凭据不会被删除。", "取消", "清除") == 1 {
 		a.wipeData()
 	}
+}
+
+// openPrivacySettings 打开系统设置里的「完全磁盘访问权限」页面。
+func openPrivacySettings() {
+	go func() {
+		_ = exec.Command("open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles").Run()
+	}()
 }

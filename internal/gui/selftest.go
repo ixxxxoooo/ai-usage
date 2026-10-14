@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/ixxxxoooo/ai-usage/internal/placement"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
 )
 
 // SelfTestReport 是运行期自检的输出（JSON），用于 E2E 脚本断言真实窗口位置。
@@ -27,6 +29,15 @@ type SelfTestReport struct {
 	Panel     placement.Rect   `json:"panel"`
 	PanelOpen bool             `json:"panelOpen"`
 	Page      string           `json:"page,omitempty"`
+	// deepseek 模式专用（不含任何凭据原文）
+	DSStatus   string               `json:"dsStatus,omitempty"`
+	DSMessage  string               `json:"dsMessage,omitempty"`
+	DSTokenSrc string               `json:"dsTokenSrc,omitempty"`
+	DSHasData  bool                 `json:"dsHasData,omitempty"`
+	DSDiag     *service.DSDiagnosis `json:"dsDiag,omitempty"`
+	CurStatus  string               `json:"curStatus,omitempty"`
+	CurMessage string               `json:"curMessage,omitempty"`
+	CurSource  string               `json:"curSource,omitempty"`
 }
 
 // toRect 把 MyGo 的矩形转成 placement.Rect。
@@ -74,6 +85,7 @@ func parseBounds(s string) (placement.Rect, error) {
 //	position   打开托盘浮窗，比对它与托盘图标/显示器的真实位置关系
 //	panel-set  打开大面板并设置为 bounds（"x,y,w,h"），用于验证窗口位置/尺寸记忆
 //	panel-get  打开大面板并上报它此刻的位置/尺寸
+//	deepseek   等首轮刷新结束，上报 DeepSeek 状态与各候选凭据（浏览器/手动/API Key）的检查结果
 //	show:页面  打开大面板到指定页面并保持 30 秒（供截图），页面为 overview/cursor/deepseek/settings
 //
 // 参数 mode：自检模式；out：报告输出路径；bounds：panel-set 用的目标矩形。
@@ -93,6 +105,8 @@ func (a *App) RunSelfTest(mode, out, bounds string) {
 			a.selfTestPanelSet(&rep, bounds, fail)
 		case "panel-get":
 			a.selfTestPanelGet(&rep, fail)
+		case "deepseek":
+			a.selfTestDeepSeek(&rep, fail)
 		default:
 			if page, ok := strings.CutPrefix(mode, "show:"); ok {
 				a.selfTestShow(&rep, page, fail)
@@ -231,4 +245,30 @@ func abs(n int) int {
 		return -n
 	}
 	return n
+}
+
+// selfTestDeepSeek 等首轮刷新结束后，上报 DeepSeek 状态，并逐个检查所有候选凭据。
+//
+// 在真实应用进程里运行，因此能反映"从 Finder/open 启动时"的真实权限与登录获取结果。
+// 报告里只有脱敏信息，不含凭据原文。
+func (a *App) selfTestDeepSeek(rep *SelfTestReport, fail func(string, ...any)) {
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		st, cs := a.svc.State().DeepSeek, a.svc.State().Cursor
+		if !st.LastTry.IsZero() && st.Status != service.StatusLoading && !cs.LastTry.IsZero() && cs.Status != service.StatusLoading {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	st := a.svc.State().DeepSeek
+	rep.DSStatus, rep.DSMessage, rep.DSTokenSrc, rep.DSHasData = st.Status.StatusText(), st.Message, st.TokenSrc, st.HasBalance
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+	d := a.svc.DiagnoseDeepSeek(ctx)
+	rep.DSDiag = &d
+	cs := a.svc.State().Cursor
+	rep.CurStatus, rep.CurMessage, rep.CurSource = cs.Status.StatusText(), cs.Message, cs.CredSource
+	if st.Status != service.StatusOK {
+		fail("DeepSeek 状态不是正常：%s（%s）", rep.DSStatus, st.Message)
+	}
 }

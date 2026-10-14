@@ -14,7 +14,7 @@ import (
 )
 
 // AppVersion 是应用版本号，显示在「关于」并写入备份文件。
-const AppVersion = "1.0.0"
+const AppVersion = "1.0.1"
 
 // hooks 是界面对外部世界的交互入口：文件对话框与异步执行。
 // 默认走真实实现，测试时可整体替换，避免弹窗与 goroutine。

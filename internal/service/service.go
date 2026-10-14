@@ -13,6 +13,7 @@ import (
 	"github.com/ixxxxoooo/ai-usage/internal/provider/deepseek"
 	"github.com/ixxxxoooo/ai-usage/internal/secret"
 	"github.com/ixxxxoooo/ai-usage/internal/store"
+	"github.com/ixxxxoooo/ai-usage/internal/util"
 )
 
 // Config 是创建 Service 所需的依赖，便于测试时注入假实现。
@@ -27,6 +28,10 @@ type Config struct {
 	CursorLocalCreds func() (cursor.Credentials, error)
 	// ChromeTokens 扫描浏览器里的 DeepSeek token；默认扫描本机各浏览器。
 	ChromeTokens func() ([]deepseek.ChromeToken, error)
+	// ChromeNotes 返回最近一次扫描浏览器的记录（仅诊断用）；默认重新扫描并返回记录。
+	ChromeNotes func() []string
+	// BrowserDenied 判断浏览器数据目录是否被 macOS 权限拒绝；默认检查本机各浏览器。
+	BrowserDenied func() bool
 	// Notify 发送系统通知；为 nil 则不通知。
 	Notify func(id, title, body string)
 	// OnChange 在状态变化后调用（可能在任意 goroutine，需自行切线程）。
@@ -75,6 +80,12 @@ func New(cfg Config) (*Service, error) {
 	}
 	if cfg.ChromeTokens == nil {
 		cfg.ChromeTokens = func() ([]deepseek.ChromeToken, error) { return deepseek.FindChromeTokens("") }
+	}
+	if cfg.BrowserDenied == nil {
+		cfg.BrowserDenied = func() bool { return deepseek.BrowserAccessDenied("") }
+	}
+	if cfg.ChromeNotes == nil {
+		cfg.ChromeNotes = func() []string { _, n, _ := deepseek.ScanChromeTokens(""); return n }
 	}
 	s := &Service{cfg: cfg, kick: make(chan struct{}, 1), cfgChange: make(chan struct{}, 1), stop: make(chan struct{})}
 	st, err := cfg.Store.GetSettings()
@@ -491,7 +502,11 @@ func (s *Service) deepseekToken(forceRescan bool) (string, string, error) {
 		return s.chromeTok, s.chromeSrc, nil
 	}
 	s.chromeTok, s.chromeSrc = "", ""
-	return manual()
+	tok, src, err := manual()
+	if err != nil && s.cfg.BrowserDenied != nil && s.cfg.BrowserDenied() {
+		return "", "", deepseek.ErrBrowserDenied
+	}
+	return tok, src, err
 }
 
 // invalidateToken 清除缓存的浏览器 token（收到 401 时调用）。
@@ -514,7 +529,11 @@ func (s *Service) refreshDeepSeek(ctx context.Context) {
 	if apiKey == "" && !hasToken {
 		s.update(func(x *State) {
 			x.DeepSeek.HasAPIKey, x.DeepSeek.TokenSrc = false, "未配置"
-			s.applyFailure(&x.DeepSeek.ProviderState, deepseek.ErrNoCredentials)
+			err := tokErr
+			if err == nil {
+				err = deepseek.ErrNoCredentials
+			}
+			s.applyFailure(&x.DeepSeek.ProviderState, err)
 		})
 		return
 	}
@@ -529,9 +548,8 @@ func (s *Service) refreshDeepSeek(ctx context.Context) {
 		if errors.Is(err, deepseek.ErrUnauthorized) {
 			// 浏览器里的 token 可能刚刷新过，重扫一次再试
 			s.invalidateToken()
-			if t2, src2, e2 := s.deepseekToken(true); e2 == nil && t2 != token {
-				token, tokenSrc = t2, src2
-				b, err = s.cfg.DS.FetchSummary(ctx, token)
+			if t2, src2, b2, ok := s.tryOtherTokens(ctx, token); ok {
+				token, tokenSrc, b, err = t2, src2, b2, nil
 			}
 		}
 		if err != nil {
@@ -698,6 +716,14 @@ func (s *Service) SaveSecret(key, value string) error {
 		return errors.New("凭据存储不可用")
 	}
 	value = strings.TrimSpace(value)
+	if key == secret.KeyDeepSeekToken && value != "" {
+		// 兼容粘贴 "Bearer xxx"、整行请求头、localStorage JSON；Cookie 会被拒绝
+		tok, nerr := deepseek.NormalizeToken(value)
+		if nerr != nil {
+			return errors.New("这不是平台 token（看起来像 Cookie）。请粘贴请求头 authorization: Bearer 后面的那一串，或 localStorage 里 userToken 的 value")
+		}
+		value = tok
+	}
 	var err error
 	if value == "" {
 		err = s.cfg.Secrets.Delete(key)
@@ -759,4 +785,100 @@ func (s *Service) TestDeepSeek(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("API Key 有效：余额 %.2f %s", b.Total, b.Currency), nil
+}
+
+// tryOtherTokens 重新扫描浏览器，依次尝试除 bad 之外的所有候选 token，返回第一个可用的。
+//
+// 多个浏览器/Profile 里可能残留已过期的旧登录，只取第一个会误判为"登录过期"，所以要逐个试。
+// 成功时会把该 token 写入缓存，下次直接使用。
+//
+// 参数 ctx：上下文；bad：已确认失效的 token。
+// 返回值：可用 token、来源说明、汇总数据、是否找到。
+func (s *Service) tryOtherTokens(ctx context.Context, bad string) (string, string, model.DeepSeekBalance, bool) {
+	if s.State().Settings.DeepSeekAuthMode == model.AuthManual {
+		return "", "", model.DeepSeekBalance{}, false
+	}
+	toks, _ := s.cfg.ChromeTokens()
+	for _, t := range toks {
+		if t.Token == "" || t.Token == bad {
+			continue
+		}
+		b, err := s.cfg.DS.FetchSummary(ctx, t.Token)
+		if err != nil {
+			continue
+		}
+		src := t.Browser + " / " + t.Profile
+		s.tokenMu.Lock()
+		s.chromeTok, s.chromeSrc = t.Token, src
+		s.tokenMu.Unlock()
+		return t.Token, src, b, true
+	}
+	return "", "", model.DeepSeekBalance{}, false
+}
+
+// DSCandidate 是一次诊断中某个候选登录凭据的检查结果（不含 token 原文）。
+//
+// @author ygw
+type DSCandidate struct {
+	Source string `json:"source"` // 来源，如 "Chrome / Default" 或 "钥匙串（手动粘贴）"
+	Masked string `json:"masked"` // 脱敏后的 token，如 2Cn7…03P4
+	Length int    `json:"length"` // token 长度
+	Usable bool   `json:"usable"` // 用它调用接口是否成功
+	Error  string `json:"error,omitempty"`
+}
+
+// DSDiagnosis 是 DeepSeek 凭据诊断结果。
+//
+// @author ygw
+type DSDiagnosis struct {
+	Mode       string        `json:"mode"`       // auto / manual
+	ScanError  string        `json:"scanError"`  // 扫描浏览器时的错误
+	ScanNotes  []string      `json:"scanNotes"`  // 每个浏览器 Profile 的扫描记录
+	Candidates []DSCandidate `json:"candidates"` // 浏览器与手动 token 的检查结果
+	APIKey     *DSCandidate  `json:"apiKey,omitempty"`
+}
+
+// DiagnoseDeepSeek 逐个检查所有候选凭据（浏览器 token、手动 token、API Key）并给出结果。
+//
+// 只发只读请求；返回内容不包含任何凭据原文。
+//
+// 参数 ctx：上下文。
+// 返回值：诊断结果。
+func (s *Service) DiagnoseDeepSeek(ctx context.Context) DSDiagnosis {
+	d := DSDiagnosis{Mode: string(s.State().Settings.DeepSeekAuthMode)}
+	check := func(source, tok string) DSCandidate {
+		c := DSCandidate{Source: source, Masked: util.MaskSecret(tok), Length: len(tok)}
+		if _, err := s.cfg.DS.FetchSummary(ctx, tok); err != nil {
+			c.Error = err.Error()
+		} else {
+			c.Usable = true
+		}
+		return c
+	}
+	toks, err := s.cfg.ChromeTokens()
+	if err != nil {
+		d.ScanError = err.Error()
+	}
+	if s.cfg.ChromeNotes != nil {
+		d.ScanNotes = s.cfg.ChromeNotes()
+	}
+	for _, t := range toks {
+		d.Candidates = append(d.Candidates, check(t.Browser+" / "+t.Profile, t.Token))
+	}
+	if s.cfg.Secrets != nil {
+		if v, _ := s.cfg.Secrets.Get(secret.KeyDeepSeekToken); strings.TrimSpace(v) != "" {
+			d.Candidates = append(d.Candidates, check("钥匙串（手动粘贴）", strings.TrimSpace(v)))
+		}
+		if v, _ := s.cfg.Secrets.Get(secret.KeyDeepSeekKey); strings.TrimSpace(v) != "" {
+			v = strings.TrimSpace(v)
+			c := DSCandidate{Source: "钥匙串（API Key）", Masked: util.MaskSecret(v), Length: len(v)}
+			if _, err := s.cfg.DS.FetchBalanceByKey(ctx, v); err != nil {
+				c.Error = err.Error()
+			} else {
+				c.Usable = true
+			}
+			d.APIKey = &c
+		}
+	}
+	return d
 }

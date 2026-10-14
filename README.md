@@ -117,6 +117,8 @@ AI Usage **只在本机运行，没有任何服务端、没有统计和遥测**�
 <summary>DeepSeek 只有余额，没有今日 Token / 账单？</summary>
 
 那些数据来自平台网页的接口，需要网页登录信息。请先在 Chrome 等浏览器登录 <https://platform.deepseek.com>，再点刷新；或在设置里手动粘贴 token。
+
+详见 [DeepSeek 登录说明](docs/DEEPSEEK_AUTH.md)：接口靠 `authorization: Bearer <token>` 鉴权，**不需要 Cookie**。如果一直显示「未登录」，多半是 macOS 不允许应用读取 Chrome 数据：到「系统设置 → 隐私与安全性 → 完全磁盘访问权限」允许 AI Usage 后重启，或直接在设置里手动粘贴 token（支持直接粘贴整行 `authorization: Bearer …`）。
 </details>
 
 <details>
