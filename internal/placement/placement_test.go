@@ -120,3 +120,31 @@ func TestRectHelpers(t *testing.T) {
 		t.Error("Within")
 	}
 }
+
+// TestEnsureUsable 恢复窗口时：过小放大、过大缩小、越界拉回、拔掉显示器后回到主屏。
+func TestEnsureUsable(t *testing.T) {
+	main := Rect{0, 30, 2560, 1410}
+	right := Rect{2560, 30, 1920, 1050}
+	cases := []struct {
+		name  string
+		in    Rect
+		works []Rect
+		want  Rect
+	}{
+		{"正常不变", Rect{200, 160, 900, 600}, []Rect{main}, Rect{200, 160, 900, 600}},
+		{"过小放大", Rect{100, 100, 200, 200}, []Rect{main}, Rect{100, 100, 820, 520}},
+		{"过大缩小", Rect{100, 100, 4000, 3000}, []Rect{main}, Rect{0, 30, 2560, 1410}},
+		{"部分越界拉回", Rect{2300, 1300, 900, 600}, []Rect{main}, Rect{1660, 840, 900, 600}},
+		{"完全在屏外回主屏居中", Rect{5000, 3000, 900, 600}, []Rect{main}, Rect{830, 435, 900, 600}},
+		{"副屏拔掉后回主屏", Rect{3000, 200, 900, 600}, []Rect{main}, Rect{830, 435, 900, 600}},
+		{"副屏仍在则保留", Rect{3000, 200, 900, 600}, []Rect{main, right}, Rect{3000, 200, 900, 600}},
+		{"负坐标副屏", Rect{-1500, 100, 900, 600}, []Rect{{-1920, 0, 1920, 1080}, main}, Rect{-1500, 100, 900, 600}},
+		{"没有显示器信息不改", Rect{9, 9, 9, 9}, nil, Rect{9, 9, 9, 9}},
+		{"屏幕比最小尺寸还小", Rect{0, 0, 2000, 2000}, []Rect{{0, 0, 700, 400}}, Rect{0, 0, 700, 400}},
+	}
+	for _, c := range cases {
+		if got := EnsureUsable(c.in, c.works, 820, 520); got != c.want {
+			t.Errorf("%s: 得到 %+v，期望 %+v", c.name, got, c.want)
+		}
+	}
+}

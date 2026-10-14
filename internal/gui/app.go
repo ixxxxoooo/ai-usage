@@ -10,6 +10,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/liwenjiao/ai-usage/internal/assets"
 	"github.com/liwenjiao/ai-usage/internal/model"
+	"github.com/liwenjiao/ai-usage/internal/placement"
 	"github.com/liwenjiao/ai-usage/internal/service"
 )
 
@@ -307,6 +308,7 @@ func (a *App) OpenPanel(page string) {
 		Vibrancy:      mygo.VibrancySidebar,
 		Content:       ui.View(a.panelView),
 	})
+	a.fitPanel(a.panel)
 	a.track(a.panel)
 	panel := a.panel
 	a.panel.OnClosed(func() {
@@ -320,3 +322,15 @@ func (a *App) OpenPanel(page string) {
 
 // Settings 返回当前设置（便捷方法）。
 func (a *App) Settings() model.Settings { return a.svc.Settings() }
+
+// fitPanel 修正恢复出来的面板窗口：过小放大、过大缩小、落在已拔掉的显示器上则拉回可见区域。
+//
+// 参数 w：刚创建（已恢复上次位置）的面板窗口。
+func (a *App) fitPanel(w *mygo.Window) {
+	cur := toRect(w.Bounds())
+	want := placement.EnsureUsable(cur, workAreas(), 820, 520)
+	if want != cur {
+		log.Printf("面板窗口位置已修正：%+v -> %+v", cur, want)
+		w.SetBounds(mygo.Rectangle{X: want.X, Y: want.Y, Width: want.W, Height: want.H})
+	}
+}

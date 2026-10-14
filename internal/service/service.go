@@ -406,17 +406,30 @@ func (s *Service) syncCursorEvents(ctx context.Context, cred cursor.Credentials,
 			since = usage.CycleStart
 		}
 	}
-	evs, err := s.cfg.Cursor.FetchEvents(ctx, cred, since, time.Time{}, nil)
-	if len(evs) > 0 {
-		if _, e := s.cfg.Store.UpsertCursorEvents(evs); e != nil {
-			return "保存明细失败：" + e.Error()
+	save := func(since, until time.Time) string {
+		evs, err := s.cfg.Cursor.FetchEvents(ctx, cred, since, until, nil)
+		if len(evs) > 0 {
+			if _, e := s.cfg.Store.UpsertCursorEvents(evs); e != nil {
+				return "保存明细失败：" + e.Error()
+			}
 		}
+		if err != nil {
+			_, msg := classify(err)
+			return msg
+		}
+		return ""
 	}
-	if err != nil {
-		_, msg := classify(err)
-		return msg
+	if since.IsZero() && !usage.CycleStart.IsZero() {
+		// 首次同步：历史可能有几千条、要拉几十秒。先拉并落库本周期（界面马上可用），再补更早的历史。
+		if msg := save(usage.CycleStart, time.Time{}); msg != "" {
+			return msg
+		}
+		if msg := save(time.Time{}, usage.CycleStart); msg != "" {
+			return "本周期明细已同步，更早的历史未拉完：" + msg
+		}
+		return ""
 	}
-	return ""
+	return save(since, time.Time{})
 }
 
 // checkCursorThresholds 在越过设定百分比时发送一次通知（同一周期同一阈值只通知一次）。

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -68,7 +69,21 @@ func newCursorFake(t *testing.T) *cursorFake {
 			fmt.Fprint(w, `{"totalUsageEventsCount":3,"usageEventsDisplay":[]}`)
 			return
 		}
-		fmt.Fprintf(w, `{"totalUsageEventsCount":3,"usageEventsDisplay":[%s]}`, strings.Join(f.events, ","))
+		// 按 startDate/endDate（毫秒）过滤，模拟真实接口。
+		from, _ := strconv.ParseInt(fmt.Sprint(body["startDate"]), 10, 64)
+		to, _ := strconv.ParseInt(fmt.Sprint(body["endDate"]), 10, 64)
+		var picked []string
+		for _, ev := range f.events {
+			var one struct {
+				Timestamp string `json:"timestamp"`
+			}
+			_ = json.Unmarshal([]byte(ev), &one)
+			ts, _ := strconv.ParseInt(one.Timestamp, 10, 64)
+			if ts >= from && ts <= to {
+				picked = append(picked, ev)
+			}
+		}
+		fmt.Fprintf(w, `{"totalUsageEventsCount":%d,"usageEventsDisplay":[%s]}`, len(picked), strings.Join(picked, ","))
 	})
 	f.Server = httptest.NewServer(mux)
 	t.Cleanup(f.Close)
@@ -243,13 +258,13 @@ func TestRefreshSuccess(t *testing.T) {
 func TestIncrementalEvents(t *testing.T) {
 	h := newHarness(t)
 	h.svc.RefreshAll(context.Background())
-	if h.cur.eventBody[0]["startDate"] != "0" {
-		t.Errorf("首次应拉全部历史: %v", h.cur.eventBody[0])
+	if len(h.cur.eventBody) != 2 || h.cur.eventBody[0]["startDate"] == "0" || h.cur.eventBody[1]["startDate"] != "0" {
+		t.Errorf("首次应先拉本周期、再补全部更早历史: %v", h.cur.eventBody)
 	}
 	h.svc.RefreshAll(context.Background())
 	last := h.cur.eventBody[len(h.cur.eventBody)-1]
-	if last["startDate"] == "0" {
-		t.Error("二次刷新应为增量")
+	if last["startDate"] == "0" || len(h.cur.eventBody) != 3 {
+		t.Error("二次刷新应为单次增量请求")
 	}
 	if c := h.svc.State().Cursor.EventCount; c != 3 {
 		t.Errorf("重复拉取不应重复入库: %d", c)
@@ -693,4 +708,33 @@ func waitFor(t *testing.T, cond func() bool, what string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("等待超时：%s", what)
+}
+
+// TestFirstSyncCycleThenHistory 首次同步先拉本周期再补更早历史，两段都要落库。
+func TestFirstSyncCycleThenHistory(t *testing.T) {
+	h := newHarness(t)
+	old := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC) // 早于周期起点 9/16
+	h.cur.events = append(h.cur.events, fmt.Sprintf(`{"timestamp":"%d","model":"old-model","kind":"USAGE_EVENT_KIND_INCLUDED_IN_PRO","requestsCosts":1,"tokenUsage":{"inputTokens":9}}`, old.UnixMilli()))
+	h.svc.RefreshAll(context.Background())
+	st := h.svc.State()
+	if st.Cursor.EventCount != 4 || st.Cursor.EventsErr != "" {
+		t.Fatalf("首次同步应拿到本周期 3 条 + 历史 1 条，得到 %d 条，错误 %q", st.Cursor.EventCount, st.Cursor.EventsErr)
+	}
+	h.cur.mu.Lock()
+	calls := len(h.cur.eventBody)
+	h.cur.mu.Unlock()
+	if calls < 2 {
+		t.Errorf("应分两段请求，实际 %d 次", calls)
+	}
+	// 之后的增量刷新只拉重叠区间，不重复拉全部历史。
+	h.cur.mu.Lock()
+	h.cur.eventBody = nil
+	h.cur.mu.Unlock()
+	h.svc.RefreshAll(context.Background())
+	h.cur.mu.Lock()
+	n := len(h.cur.eventBody)
+	h.cur.mu.Unlock()
+	if n != 1 {
+		t.Errorf("增量刷新应只请求 1 次，实际 %d", n)
+	}
 }

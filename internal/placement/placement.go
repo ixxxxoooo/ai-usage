@@ -138,3 +138,29 @@ func clamp(v, lo, hi int) int {
 	}
 	return min(max(v, lo), hi)
 }
+
+// EnsureUsable 保证窗口尺寸不小于最小值（且不超过所在显示器可用区），并尽量让整个窗口落在显示器内。
+//
+// 用于恢复上次保存的窗口：旧状态可能来自已拔掉的显示器、被缩得过小或比屏幕还大。
+//
+// 参数 r：待检查的窗口矩形；works：各显示器可用区；minW、minH：最小尺寸。
+// 返回值：修正后的矩形（无需修正时原样返回）。
+func EnsureUsable(r Rect, works []Rect, minW, minH int) Rect {
+	if len(works) == 0 {
+		return r
+	}
+	r = Restore(r, works, 80)
+	host := works[0]
+	for _, w := range works {
+		if r.CenterX() >= w.X && r.CenterX() < w.Right() && r.CenterY() >= w.Y && r.CenterY() < w.Bottom() {
+			host = w
+			break
+		}
+	}
+	out := r
+	out.W = clamp(r.W, min(minW, host.W), host.W)
+	out.H = clamp(r.H, min(minH, host.H), host.H)
+	out.X = clamp(r.X, host.X, max(host.X, host.Right()-out.W))
+	out.Y = clamp(r.Y, host.Y, max(host.Y, host.Bottom()-out.H))
+	return out
+}

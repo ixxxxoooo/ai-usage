@@ -74,6 +74,7 @@ func parseBounds(s string) (placement.Rect, error) {
 //	position   打开托盘浮窗，比对它与托盘图标/显示器的真实位置关系
 //	panel-set  打开大面板并设置为 bounds（"x,y,w,h"），用于验证窗口位置/尺寸记忆
 //	panel-get  打开大面板并上报它此刻的位置/尺寸
+//	show:页面  打开大面板到指定页面并保持 30 秒（供截图），页面为 overview/cursor/deepseek/settings
 //
 // 参数 mode：自检模式；out：报告输出路径；bounds：panel-set 用的目标矩形。
 // 必须在 App.Start 之后调用（它自己起 goroutine，不会阻塞）。
@@ -93,7 +94,11 @@ func (a *App) RunSelfTest(mode, out, bounds string) {
 		case "panel-get":
 			a.selfTestPanelGet(&rep, fail)
 		default:
-			fail("未知自检模式 %q", mode)
+			if page, ok := strings.CutPrefix(mode, "show:"); ok {
+				a.selfTestShow(&rep, page, fail)
+			} else {
+				fail("未知自检模式 %q", mode)
+			}
 		}
 		b, _ := json.MarshalIndent(rep, "", "  ")
 		if err := os.WriteFile(out, b, 0o644); err != nil {
@@ -177,6 +182,26 @@ func (a *App) selfTestPanelSet(rep *SelfTestReport, bounds string, fail func(str
 	}
 	onMain(func() { a.panel.Close() })
 	time.Sleep(600 * time.Millisecond)
+}
+
+// selfTestShow 打开面板到指定页面并保持 30 秒，供外部截图核对界面。
+func (a *App) selfTestShow(rep *SelfTestReport, page string, fail func(string, ...any)) {
+	switch page {
+	case PageOverview, PageCursor, PageDeepSeek, PageSettings:
+	default:
+		fail("未知页面 %q", page)
+		return
+	}
+	onMain(func() { a.OpenPanel(page) })
+	time.Sleep(1200 * time.Millisecond)
+	onMain(func() { a.panel.SetBounds(mygo.Rectangle{X: 40, Y: 60, Width: PanelWidth, Height: PanelHeight}) })
+	time.Sleep(300 * time.Millisecond)
+	onMain(func() {
+		rep.Panel = toRect(a.panel.Bounds())
+		rep.PanelOpen = a.panel != nil
+		rep.Page = a.ui.page
+	})
+	time.Sleep(30 * time.Second)
 }
 
 // selfTestPanelGet 打开面板并上报其位置尺寸，同时校验它落在某个显示器内。
