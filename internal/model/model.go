@@ -374,7 +374,7 @@ const (
 // 返回值：带合理默认值的 Settings。
 func DefaultSettings() Settings {
 	return Settings{
-		RefreshMinutes:      5,
+		RefreshMinutes:      1,
 		TrayDisplay:         TrayCursor,
 		CursorAuthMode:      AuthAuto,
 		DeepSeekAuthMode:    AuthAuto,

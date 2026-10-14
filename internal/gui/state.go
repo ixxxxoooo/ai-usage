@@ -2,8 +2,8 @@ package gui
 
 import (
 	"github.com/egoist/mygo/ui"
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/transfer"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/transfer"
 )
 
 // allModels 是模型筛选里「不限」的显示名。

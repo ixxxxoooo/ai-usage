@@ -6,10 +6,10 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/secret"
-	"github.com/liwenjiao/ai-usage/internal/service"
-	"github.com/liwenjiao/ai-usage/internal/util"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/secret"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
+	"github.com/ixxxxoooo/ai-usage/internal/util"
 )
 
 // 设置页里各选项的显示文案与对应取值。
@@ -36,7 +36,7 @@ func (a *App) loadSettingsDraft() {
 	u.cursorAuth = indexOf([]string{model.AuthAuto, model.AuthManual}, s.CursorAuthMode, 0)
 	u.dsAuth = indexOf([]string{model.AuthAuto, model.AuthManual}, s.DeepSeekAuthMode, 0)
 	u.trayMode = indexOf(trayModes, s.TrayDisplay, 1)
-	u.interval = intervalLabels[indexOf(intervalMins, s.RefreshMinutes, 1)]
+	u.interval = fmt.Sprintf("%d 分钟", s.RefreshMinutes)
 	u.notifyPct = map[int]bool{}
 	for _, p := range s.NotifyCursorPercent {
 		u.notifyPct[p] = true
@@ -62,7 +62,9 @@ func (a *App) draftSettings() model.Settings {
 	s.CursorAuthMode = []string{model.AuthAuto, model.AuthManual}[u.cursorAuth]
 	s.DeepSeekAuthMode = []string{model.AuthAuto, model.AuthManual}[u.dsAuth]
 	s.TrayDisplay = trayModes[u.trayMode]
-	s.RefreshMinutes = intervalMins[indexOf(intervalLabels, u.interval, 1)]
+	if i := indexOf(intervalLabels, u.interval, -1); i >= 0 {
+		s.RefreshMinutes = intervalMins[i] // 不在预设里的自定义值（如导入的 2 分钟）保持原样，不被悄悄改掉
+	}
 	s.NotifyCursorPercent = nil
 	for _, p := range notifyChoices {
 		if u.notifyPct[p] {

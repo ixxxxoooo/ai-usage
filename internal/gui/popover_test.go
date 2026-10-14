@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/service"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
 )
 
 // newTestApp 创建一个注入了固定状态与时钟的 App（不依赖真实服务/窗口）。
@@ -93,5 +93,37 @@ func TestPopoverDarkAndScale(t *testing.T) {
 	tt.Frame()
 	if !tt.HasText("359") {
 		t.Error("深色/2x 下缺少数据")
+	}
+}
+
+// TestPopoverFitsHeight 各种状态下浮窗内容都不能超出固定高度（否则底部的「更新于」和退出按钮会被裁掉）。
+func TestPopoverFitsHeight(t *testing.T) {
+	stale := fullState()
+	stale.Cursor.Status, stale.Cursor.Message = service.StatusOffline, "网络不可用，请检查连接后重试"
+	stale.DeepSeek.Status, stale.DeepSeek.Message = service.StatusOffline, "网络不可用，请检查连接后重试"
+	worst := stale
+	worst.Cursor.Usage.CycleStart = time.Date(2026, 10, 1, 8, 0, 0, 0, time.Local) // 触发「按当前速度约…用完」
+	worst.DeepSeek.Balance.Total = 2
+	noCreds := service.State{Settings: model.DefaultSettings()}
+	noCreds.Cursor.Status, noCreds.Cursor.Message = service.StatusNoCreds, "未找到本机 Cursor 登录，请先登录 Cursor 或在设置里手动粘贴 Cookie"
+	noCreds.DeepSeek.Status, noCreds.DeepSeek.Message = service.StatusNoCreds, "未配置 DeepSeek API Key，也没有在浏览器里找到登录信息"
+	needToken := fullState()
+	needToken.DeepSeek.HasBill = false
+	cases := map[string]service.State{"正常": fullState(), "离线": stale, "最坏": worst, "未登录": noCreds, "缺 token": needToken}
+	for name, st := range cases {
+		a := newTestApp(st)
+		// 找到「底栏不再被挤出窗口」的最小高度，即内容的自然高度。
+		need := 0
+		for h := 200; h <= 700; h += 2 {
+			tt := ui.NewTester(a.popoverView, PopoverWidth, h)
+			if r, ok := tt.Find(RefreshedText(st, testNow)); ok && r.Y+r.H <= float32(h)-10 {
+				need = h
+				break
+			}
+		}
+		t.Logf("%s: 内容自然高度约 %d（浮窗高 %d）", name, need, PopoverHeight)
+		if need == 0 || need > PopoverHeight {
+			t.Errorf("%s: 内容超出浮窗高度，需要 %d > %d", name, need, PopoverHeight)
+		}
 	}
 }

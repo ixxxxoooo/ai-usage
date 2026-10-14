@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/provider/cursor"
-	"github.com/liwenjiao/ai-usage/internal/provider/deepseek"
-	"github.com/liwenjiao/ai-usage/internal/util"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/cursor"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/deepseek"
+	"github.com/ixxxxoooo/ai-usage/internal/util"
 )
 
 // TestLiveCursor 读取本机 Cursor 登录，拉取用量与最近明细，核对两者的次数一致。

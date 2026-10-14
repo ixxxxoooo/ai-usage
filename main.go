@@ -15,10 +15,10 @@ import (
 	"strings"
 
 	"github.com/egoist/mygo"
-	"github.com/liwenjiao/ai-usage/internal/gui"
-	"github.com/liwenjiao/ai-usage/internal/secret"
-	"github.com/liwenjiao/ai-usage/internal/service"
-	"github.com/liwenjiao/ai-usage/internal/store"
+	"github.com/ixxxxoooo/ai-usage/internal/gui"
+	"github.com/ixxxxoooo/ai-usage/internal/secret"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
+	"github.com/ixxxxoooo/ai-usage/internal/store"
 )
 
 // dataDir 返回数据目录：优先环境变量，否则 ~/Library/Application Support/AI Usage。

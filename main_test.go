@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ixxxxoooo/ai-usage/internal/gui"
 )
 
 // TestParseSelfTest 验证命令行自检参数解析。
@@ -31,5 +34,22 @@ func TestDataDirEnv(t *testing.T) {
 	}
 	if _, err := os.Stat(got); err != nil {
 		t.Error(err)
+	}
+}
+
+// TestVersionMatchesMygoJSON 代码里的版本号必须与 mygo.json 一致（发布流程以 mygo.json 为准）。
+func TestVersionMatchesMygoJSON(t *testing.T) {
+	b, err := os.ReadFile("mygo.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Version != gui.AppVersion {
+		t.Errorf("mygo.json 版本 %q 与 gui.AppVersion %q 不一致", cfg.Version, gui.AppVersion)
 	}
 }

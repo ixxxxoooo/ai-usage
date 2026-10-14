@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/service"
-	"github.com/liwenjiao/ai-usage/internal/util"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
+	"github.com/ixxxxoooo/ai-usage/internal/util"
 )
 
 // DeepSeek 账单页的时间范围与指标。

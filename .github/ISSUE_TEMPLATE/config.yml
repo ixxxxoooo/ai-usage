@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全问题（请私下报告）
+    url: https://github.com/ixxxxoooo/ai-usage/security/advisories/new
+    about: 凭据泄露、非只读访问等安全问题请不要公开提 Issue
+  - name: 使用问题 / 常见问题
+    url: https://github.com/ixxxxoooo/ai-usage#常见问题
+    about: 先看 README 的常见问题

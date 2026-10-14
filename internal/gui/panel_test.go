@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/secret"
-	"github.com/liwenjiao/ai-usage/internal/service"
-	"github.com/liwenjiao/ai-usage/internal/store"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/secret"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
+	"github.com/ixxxxoooo/ai-usage/internal/store"
 )
 
 // panelEnv 是面板测试的运行环境：真实 SQLite（临时目录）+ 内存凭据 + 注入的状态与文件对话框。

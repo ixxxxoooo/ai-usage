@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/httpx"
-	"github.com/liwenjiao/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/httpx"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
 )
 
 // 预定义错误，供上层区分状态。

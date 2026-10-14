@@ -64,6 +64,14 @@ func card(c *ui.Context) ui.Element {
 	return ui.Column(c).Padding(12).Gap(8).Radius(12).Background(bg).Border(1, t.Border.Alpha(0.6))
 }
 
+// compactCard 创建紧凑卡片（托盘浮窗用）：内边距与间距比大面板的 card 更小。
+//
+// 参数 c：上下文。
+// 返回值：卡片元素（调用方继续 Children）。
+func compactCard(c *ui.Context) ui.Element {
+	return card(c).Padding(9, 11, 9, 11).Gap(5).Radius(10)
+}
+
 // dot 画一个小圆点（状态指示）。
 func dot(c *ui.Context, col ui.Color) ui.Element {
 	return ui.Box(c).Size(7, 7).Radius(3.5).Background(col)

@@ -1,0 +1,115 @@
+# 持续集成：格式 / vet / 测试 / 构建通用 DMG 并做冒烟验证。
+# 也可被 release.yml 复用（workflow_call），保证「发布出去的 DMG」就是通过全部检查的那一个。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    outputs:
+      version:
+        description: 构建出的版本号（来自 mygo.json）
+        value: ${{ jobs.build.outputs.version }}
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 测试
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: 格式检查（gofmt）
+        run: |
+          bad="$(gofmt -l .)"
+          if [ -n "$bad" ]; then echo "以下文件未格式化："; echo "$bad"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: mygo vet（原生 UI 生命周期检查）
+        run: go tool mygo vet
+      - name: 编译真实联调测试（不运行）
+        run: go vet -tags live ./...
+      - name: 单元与界面测试（含竞态检测）
+        run: go test -race -count=1 ./...
+
+  build:
+    name: 构建 DMG
+    needs: test
+    runs-on: macos-latest
+    timeout-minutes: 25
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: 读取版本号
+        id: meta
+        run: echo "version=$(jq -r .version mygo.json)" >> "$GITHUB_OUTPUT"
+      - name: 构建通用（Intel + Apple 芯片）.app 与 .dmg
+        run: go tool mygo build -platform darwin/universal
+      - name: 整理产物并生成校验和
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          mkdir -p dist
+          cp "build/darwin-universal/AI Usage ${VERSION}.dmg" "dist/AI-Usage-${VERSION}.dmg"
+          (cd dist && shasum -a 256 "AI-Usage-${VERSION}.dmg" > SHA256SUMS && cat SHA256SUMS)
+      - name: 验证 DMG 与应用包
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          DMG="dist/AI-Usage-${VERSION}.dmg"
+          hdiutil verify "$DMG"
+          MNT="$(mktemp -d)"
+          hdiutil attach "$DMG" -mountpoint "$MNT" -nobrowse -readonly -quiet
+          trap 'hdiutil detach "$MNT" -quiet || true' EXIT
+          APP="$MNT/AI Usage.app"
+          test -d "$APP"
+          BIN="$APP/Contents/MacOS/AI Usage"
+          echo "架构：$(lipo -archs "$BIN")"
+          lipo -archs "$BIN" | grep -q arm64
+          lipo -archs "$BIN" | grep -q x86_64
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Contents/Info.plist" | grep -qx "${VERSION}"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Contents/Info.plist"
+          ls -la "$DMG"
+      - name: 冒烟测试：真实启动 .app 并做托盘浮窗位置自检
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.meta.outputs.version }}"
+          MNT="$(mktemp -d)"
+          hdiutil attach "dist/AI-Usage-${VERSION}.dmg" -mountpoint "$MNT" -nobrowse -readonly -quiet
+          trap 'hdiutil detach "$MNT" -quiet || true' EXIT
+          DATA="$(mktemp -d)"
+          export AIUSAGE_DATA_DIR="$DATA"
+          # 自检模式会在真实窗口里打开浮窗并校验位置，写出 JSON 报告后自行退出
+          timeout 90 "$MNT/AI Usage.app/Contents/MacOS/AI Usage" \
+            --selftest=position --selftest-out="$DATA/position.json" || true
+          test -f "$DATA/position.json" || { echo "没有生成自检报告：应用没有正常启动"; exit 1; }
+          cat "$DATA/position.json"
+          python3 - "$DATA/position.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          if not r.get("ok"):
+              print("自检失败：", r.get("problems")); sys.exit(1)
+          print("浮窗位置自检通过")
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: AI-Usage-${{ steps.meta.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30

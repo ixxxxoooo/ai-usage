@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/util"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/util"
 )
 
 // dayKeys 返回以 now 所在日结尾的连续 n 天的日期键（YYYY-MM-DD，升序）。

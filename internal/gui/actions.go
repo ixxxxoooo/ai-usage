@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/secret"
-	"github.com/liwenjiao/ai-usage/internal/transfer"
-	"github.com/liwenjiao/ai-usage/internal/util"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/secret"
+	"github.com/ixxxxoooo/ai-usage/internal/transfer"
+	"github.com/ixxxxoooo/ai-usage/internal/util"
 )
 
 // AppVersion 是应用版本号，显示在「关于」并写入备份文件。

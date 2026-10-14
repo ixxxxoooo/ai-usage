@@ -8,16 +8,16 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"github.com/liwenjiao/ai-usage/internal/assets"
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/placement"
-	"github.com/liwenjiao/ai-usage/internal/service"
+	"github.com/ixxxxoooo/ai-usage/internal/assets"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/placement"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
 )
 
 // 浮窗与面板的尺寸（DIP）。
 const (
-	PopoverWidth  = 344
-	PopoverHeight = 404
+	PopoverWidth  = 316
+	PopoverHeight = 332
 	PanelWidth    = 1020
 	PanelHeight   = 680
 )

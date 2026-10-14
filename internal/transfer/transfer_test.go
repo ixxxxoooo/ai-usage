@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/provider/cursor"
-	"github.com/liwenjiao/ai-usage/internal/secret"
-	"github.com/liwenjiao/ai-usage/internal/store"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/cursor"
+	"github.com/ixxxxoooo/ai-usage/internal/secret"
+	"github.com/ixxxxoooo/ai-usage/internal/store"
 )
 
 var base = time.Date(2026, 10, 1, 9, 0, 0, 0, time.Local)

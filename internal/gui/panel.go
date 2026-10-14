@@ -2,7 +2,7 @@ package gui
 
 import (
 	"github.com/egoist/mygo/ui"
-	"github.com/liwenjiao/ai-usage/internal/service"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
 )
 
 // 侧边栏宽度（DIP）。

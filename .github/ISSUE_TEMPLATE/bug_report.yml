@@ -1,0 +1,50 @@
+name: Bug 报告
+description: 功能异常、数据不对、界面错位等
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！**请不要粘贴 Cookie / token / API Key / 完整日志中的敏感信息。**
+  - type: input
+    id: version
+    attributes:
+      label: AI Usage 版本
+      description: 菜单栏浮窗不显示版本时，可在 设置 页面底部查看
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS 版本与芯片
+      placeholder: macOS 15.1，Apple M2
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: 出问题的位置
+      options: [菜单栏浮窗, Cursor, DeepSeek, 大面板, 设置, 导出/导入, 通知, 安装/启动, 其他]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么？期望是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他信息
+      description: 截图（注意遮挡个人信息）、状态提示文案等

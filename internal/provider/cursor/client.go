@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/httpx"
-	"github.com/liwenjiao/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/httpx"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
 )
 
 // DefaultBaseURL 是 Cursor 网站地址。

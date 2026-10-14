@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/service"
-	"github.com/liwenjiao/ai-usage/internal/util"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
+	"github.com/ixxxxoooo/ai-usage/internal/util"
 )
 
 // 额度提示级别。

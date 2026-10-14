@@ -1,0 +1,76 @@
+# 发布：推送形如 vX.Y.Z 的 tag 后，复用 CI（测试 + 构建 + 冒烟），再把 DMG 发布到 GitHub Release。
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: 测试与构建
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: 发布到 GitHub Release
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write       # 创建 Release、上传附件
+      id-token: write       # 构建来源证明（OIDC）
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: 校验 tag 与应用版本一致
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION="$(jq -r .version mygo.json)"
+          if [ "$TAG" != "$VERSION" ]; then
+            echo "::error::tag（$TAG）与 mygo.json 的 version（$VERSION）不一致"; exit 1
+          fi
+          grep -q "^## \[${VERSION}\]" CHANGELOG.md || { echo "::error::CHANGELOG.md 缺少 ${VERSION} 的条目"; exit 1; }
+      - uses: actions/download-artifact@v8
+        with:
+          name: AI-Usage-${{ needs.ci.outputs.version }}
+          path: dist
+      - name: 再次校验 SHA256
+        run: cd dist && shasum -a 256 -c SHA256SUMS || sha256sum -c SHA256SUMS
+      - name: 生成构建来源证明
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/AI-Usage-*.dmg
+      - name: 生成发布说明
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          {
+            echo "## 安装"
+            echo
+            echo "1. 下载 \`AI-Usage-${VERSION}.dmg\`（Intel 与 Apple 芯片通用，需要 macOS 13+），拖进「应用程序」。"
+            echo "2. 首次打开：安装包为 ad-hoc 签名（无 Apple 开发者证书、未公证），请 **右键 → 打开**，或执行 \`xattr -dr com.apple.quarantine \"/Applications/AI Usage.app\"\`。"
+            echo "3. 校验（可选）：\`shasum -a 256 -c SHA256SUMS\`；也可用 \`gh attestation verify AI-Usage-${VERSION}.dmg --repo ${GITHUB_REPOSITORY}\` 验证构建来源。"
+            echo
+            echo "## 更新内容"
+            echo
+            awk -v v="$VERSION" '
+              $0 ~ "^## \\[" v "\\]" {f=1; next}
+              f && /^## \[/ {exit}
+              f && /^\[[^]]+\]: / {next}
+              f {print}
+            ' CHANGELOG.md
+            echo
+            echo "---"
+            echo "完整文档见 [README](https://github.com/${GITHUB_REPOSITORY}#readme)，隐私说明见 [PRIVACY](https://github.com/${GITHUB_REPOSITORY}/blob/main/docs/PRIVACY.md)。"
+          } > notes.md
+          cat notes.md
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          PRE=""
+          case "$VERSION" in *-*) PRE="--prerelease";; esac
+          gh release create "$GITHUB_REF_NAME" dist/AI-Usage-*.dmg dist/SHA256SUMS \
+            --title "AI Usage ${GITHUB_REF_NAME}" --notes-file notes.md --verify-tag $PRE

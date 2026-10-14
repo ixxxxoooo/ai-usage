@@ -1,4 +1,4 @@
-module github.com/liwenjiao/ai-usage
+module github.com/ixxxxoooo/ai-usage
 
 go 1.27.2
 

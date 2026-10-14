@@ -126,12 +126,12 @@ func TestDeepSeekAggregation(t *testing.T) {
 // TestSettingsNormalize 验证非法设置被修正。
 func TestSettingsNormalize(t *testing.T) {
 	d := DefaultSettings()
-	if d.RefreshMinutes != 5 || d.TrayDisplay != TrayCursor || !d.NotifyEnabled {
+	if d.RefreshMinutes != 1 || d.TrayDisplay != TrayCursor || !d.NotifyEnabled {
 		t.Errorf("默认值: %+v", d)
 	}
 	bad := Settings{RefreshMinutes: 0, TrayDisplay: "x", CursorAuthMode: "y", DeepSeekAuthMode: "", NotifyCursorPercent: []int{90, 0, 80, 80, 101}, NotifyDeepSeekBelow: -1, HistoryDays: 1}
 	n := bad.Normalize()
-	if n.RefreshMinutes != 5 || n.TrayDisplay != TrayCursor || n.CursorAuthMode != AuthAuto || n.DeepSeekAuthMode != AuthAuto {
+	if n.RefreshMinutes != 1 || n.TrayDisplay != TrayCursor || n.CursorAuthMode != AuthAuto || n.DeepSeekAuthMode != AuthAuto {
 		t.Errorf("枚举修正: %+v", n)
 	}
 	if len(n.NotifyCursorPercent) != 2 || n.NotifyCursorPercent[0] != 80 || n.NotifyCursorPercent[1] != 90 {

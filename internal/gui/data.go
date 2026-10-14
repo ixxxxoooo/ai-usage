@@ -3,8 +3,8 @@ package gui
 import (
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/store"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/store"
 )
 
 // maxEvents 是界面最多加载的 Cursor 明细条数（按时间倒序截取）。

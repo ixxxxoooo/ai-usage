@@ -14,7 +14,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
 	_ "modernc.org/sqlite" // 驱动注册
 )
 

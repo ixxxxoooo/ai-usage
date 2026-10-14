@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/service"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
 )
 
 var testNow = time.Date(2026, 10, 14, 15, 0, 0, 0, time.Local)

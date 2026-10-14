@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/secret"
-	"github.com/liwenjiao/ai-usage/internal/store"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/secret"
+	"github.com/ixxxxoooo/ai-usage/internal/store"
 )
 
 // counts 返回当前库里 Cursor 明细与 DeepSeek 账单的条数。

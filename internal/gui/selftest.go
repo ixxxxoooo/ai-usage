@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
-	"github.com/liwenjiao/ai-usage/internal/placement"
+	"github.com/ixxxxoooo/ai-usage/internal/placement"
 )
 
 // SelfTestReport 是运行期自检的输出（JSON），用于 E2E 脚本断言真实窗口位置。

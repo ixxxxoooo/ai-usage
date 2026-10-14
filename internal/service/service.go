@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/provider/cursor"
-	"github.com/liwenjiao/ai-usage/internal/provider/deepseek"
-	"github.com/liwenjiao/ai-usage/internal/secret"
-	"github.com/liwenjiao/ai-usage/internal/store"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/cursor"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/deepseek"
+	"github.com/ixxxxoooo/ai-usage/internal/secret"
+	"github.com/ixxxxoooo/ai-usage/internal/store"
 )
 
 // Config 是创建 Service 所需的依赖，便于测试时注入假实现。
@@ -373,7 +373,9 @@ func (s *Service) refreshCursor(ctx context.Context) {
 		return
 	}
 	usage.FetchedAt = s.cfg.Now()
-	if email, e := s.cfg.Cursor.FetchEmail(ctx, cred); e == nil {
+	if prev := s.State().Cursor.Usage.Email; prev != "" {
+		usage.Email = prev // 邮箱几乎不变，1 分钟刷新时不必每次都多请求一次
+	} else if email, e := s.cfg.Cursor.FetchEmail(ctx, cred); e == nil {
 		usage.Email = email
 	}
 	_ = s.cfg.Store.SetJSON("cursor_usage", usage)

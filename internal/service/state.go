@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/provider/cursor"
-	"github.com/liwenjiao/ai-usage/internal/provider/deepseek"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/cursor"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/deepseek"
 )
 
 // Status 是单个数据源的状态。

@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
-	"github.com/liwenjiao/ai-usage/internal/provider/cursor"
-	"github.com/liwenjiao/ai-usage/internal/provider/deepseek"
-	"github.com/liwenjiao/ai-usage/internal/secret"
-	"github.com/liwenjiao/ai-usage/internal/store"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/cursor"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/deepseek"
+	"github.com/ixxxxoooo/ai-usage/internal/secret"
+	"github.com/ixxxxoooo/ai-usage/internal/store"
 )
 
 // 固定“当前时间”：与真实数据一致的 2026-10-14。
@@ -587,7 +587,7 @@ func TestSettingsUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := h.svc.Settings()
-	if got.RefreshMinutes != 5 || got.TrayDisplay != model.TrayCursor {
+	if got.RefreshMinutes != 1 || got.TrayDisplay != model.TrayCursor {
 		t.Errorf("应规范化: %+v", got)
 	}
 	s.RefreshMinutes = 15
@@ -620,7 +620,7 @@ func TestSchedulerStartAndKick(t *testing.T) {
 // TestNextWait 验证下次等待时长取退避计划与间隔的较小者，且不低于 5 秒。
 func TestNextWait(t *testing.T) {
 	h := newHarness(t)
-	if w := h.svc.nextWait(); w != 5*time.Minute {
+	if w := h.svc.nextWait(); w != time.Minute {
 		t.Errorf("默认: %v", w)
 	}
 	h.svc.update(func(x *State) { x.Cursor.NextTry = fixedNow.Add(30 * time.Second) })

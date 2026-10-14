@@ -2,8 +2,8 @@ package gui
 
 import (
 	"github.com/egoist/mygo/ui"
-	"github.com/liwenjiao/ai-usage/internal/service"
-	"github.com/liwenjiao/ai-usage/internal/util"
+	"github.com/ixxxxoooo/ai-usage/internal/service"
+	"github.com/ixxxxoooo/ai-usage/internal/util"
 )
 
 // overviewPage 概览页：两张大卡片 + 近 14 天趋势图。

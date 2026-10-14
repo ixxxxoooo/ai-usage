@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/liwenjiao/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/model"
 )
 
 // 固定测试时间。
@@ -34,7 +34,7 @@ func openTemp(t *testing.T) (*Store, string) {
 func TestSettingsRoundTrip(t *testing.T) {
 	s, _ := openTemp(t)
 	d, err := s.GetSettings()
-	if err != nil || d.RefreshMinutes != 5 {
+	if err != nil || d.RefreshMinutes != 1 {
 		t.Fatalf("默认: %+v %v", d, err)
 	}
 	st := model.DefaultSettings()
@@ -49,7 +49,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	// 非法值保存时被修正
 	st.RefreshMinutes = 99999
 	s.SaveSettings(st)
-	if got, _ := s.GetSettings(); got.RefreshMinutes != 5 {
+	if got, _ := s.GetSettings(); got.RefreshMinutes != 1 {
 		t.Errorf("应修正: %d", got.RefreshMinutes)
 	}
 }
