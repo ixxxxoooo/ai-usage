@@ -84,10 +84,14 @@ func statusPill(c *ui.Context, text string, tone string) {
 func (a *App) cursorCard(c *ui.Context, vm CursorVM, st service.State) {
 	t := c.Theme()
 	brand := brandCursor(t)
-	compactCard(c).Children(func() {
+	cd := compactCard(c)
+	cd.Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			dot(c, brand)
 			ui.Text(c, "Cursor").Bold().FontSize(12)
+			if vm.Plan != "" {
+				hint(c, vm.Plan).SingleLine()
+			}
 			ui.Spacer(c)
 			label := vm.StatusText
 			if vm.Status == service.StatusOK {
@@ -100,7 +104,7 @@ func (a *App) cursorCard(c *ui.Context, vm CursorVM, st service.State) {
 			return
 		}
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			ring(c, "cursor-ring", vm.Frac, 66, 7, levelColor(t, vm.Level, brand), vm.Used, "/ "+vm.Limit)
+			ring(c, "cursor-ring", vm.Frac, 66, 7, levelColor(t, vm.Level, brand), vm.RingMain, vm.RingSub)
 			ui.Column(c).Grow(1).Gap(2).Children(func() {
 				ui.Text(c, vm.Remain).FontSize(14).Bold().SingleLine()
 				hint(c, vm.Reset).SingleLine()
@@ -112,13 +116,15 @@ func (a *App) cursorCard(c *ui.Context, vm CursorVM, st service.State) {
 			})
 		})
 	})
+	clickableCard(c, cd, func() { a.openPage(PageCursor) })
 }
 
 // deepseekCard 画 DeepSeek 卡片：余额大字 + 今日 Token/花费/本月已用。
 func (a *App) deepseekCard(c *ui.Context, vm DeepSeekVM, st service.State) {
 	t := c.Theme()
 	brand := brandDeepSeek(t)
-	compactCard(c).Children(func() {
+	cd := compactCard(c)
+	cd.Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			dot(c, brand)
 			ui.Text(c, "DeepSeek").Bold().FontSize(12)
@@ -160,6 +166,7 @@ func (a *App) deepseekCard(c *ui.Context, vm DeepSeekVM, st service.State) {
 			})
 		}
 	})
+	clickableCard(c, cd, func() { a.openPage(PageDeepSeek) })
 }
 
 // emptyState 画「没有数据」的占位：说明原因并给出「去设置」入口。

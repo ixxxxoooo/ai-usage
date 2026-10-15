@@ -16,7 +16,7 @@ import (
 // counts 返回当前库里 Cursor 明细与 DeepSeek 账单的条数。
 func (e *panelEnv) counts(t *testing.T) (int, int) {
 	t.Helper()
-	n, err := e.st.CursorEventCount()
+	n, err := e.st.CursorEventCount("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestExportImportRoundTrip(t *testing.T) {
 func TestImportMergeAndReplace(t *testing.T) {
 	e := newPanelEnv(t)
 	path := e.exportTo(t, "base.json", false)
-	extra := model.CursorEvent{Key: "local-only", Time: testNow, Model: "local-model", Requests: 1}
+	extra := model.CursorEvent{Key: "local-only", Time: testNow, Model: "local-model", Requests: 1, Account: "acct"}
 	if _, err := e.st.UpsertCursorEvents([]model.CursorEvent{extra}); err != nil {
 		t.Fatal(err)
 	}
@@ -485,7 +485,7 @@ func TestPersistAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st2.Close()
-	if n, _ := st2.CursorEventCount(); n != 6 {
+	if n, _ := st2.CursorEventCount(""); n != 6 {
 		t.Errorf("重启后明细 %d 条", n)
 	}
 	if rows, _ := st2.DeepSeekDaily("", ""); len(rows) != 4 {

@@ -4,22 +4,59 @@
 package model
 
 import (
+	"fmt"
 	"sort"
 	"time"
 )
 
-// CursorUsage 是 Cursor 老计划（按次数计费）当前周期的用量快照。
+// Cursor 计费口径（CursorUsage.Mode）。
+const (
+	// CursorModeRequests 是老计划：每周期固定次数（如 500 次），Used/Limit 单位是「次」。
+	CursorModeRequests = "requests"
+	// CursorModeUsage 是新计划/团队：按美元额度计，Used/Limit 单位是「美分」。
+	CursorModeUsage = "usage"
+)
+
+// CursorUsage 是 Cursor 当前周期的用量快照，兼容老计划（按次数）与新计划/团队（按美元额度）。
 //
 // @author ygw
 type CursorUsage struct {
-	Used       int       `json:"used"`       // 当前周期已用次数
-	Limit      int       `json:"limit"`      // 周期总额度（老计划 500）
-	CycleStart time.Time `json:"cycleStart"` // 周期起点（接口 startOfMonth）
-	FetchedAt  time.Time `json:"fetchedAt"`  // 抓取时间
+	Mode       string    `json:"mode,omitempty"`       // 计费口径，空值按老计划处理
+	Used       int       `json:"used"`                 // 已用：次数（requests）或美分（usage）
+	Limit      int       `json:"limit"`                // 周期总额度：次数或美分；0 表示没有固定上限
+	Unlimited  bool      `json:"unlimited,omitempty"`  // 账号无固定上限（企业等）
+	OnDemand   int       `json:"onDemand,omitempty"`   // 按需（超出套餐）已用美分
+	CycleStart time.Time `json:"cycleStart"`           // 周期起点
+	CycleEndAt time.Time `json:"cycleEndAt,omitempty"` // 周期终点（接口给出的精确重置时刻）
+	Membership string    `json:"membership,omitempty"` // 套餐，如 pro / pro_plus / ultra / team / enterprise
+	LimitType  string    `json:"limitType,omitempty"`  // user（个人额度）或 team（团队额度）
+	Account    string    `json:"account,omitempty"`    // 账号标识（WorkOS 用户 ID）
+	FetchedAt  time.Time `json:"fetchedAt"`            // 抓取时间
 	Email      string    `json:"email,omitempty"`
 }
 
-// Remaining 返回剩余次数（不小于 0）。
+// IsUsage 判断是否按美元额度计（新计划/团队）。
+//
+// 返回值：Mode 为 usage 返回 true。
+func (u CursorUsage) IsUsage() bool { return u.Mode == CursorModeUsage }
+
+// Amount 把额度数值（次数或美分）格式化成展示文案：老计划 "359 次"，新计划 "$16.72"。
+//
+// 参数 v：与 Used/Limit 同单位的数值。
+// 返回值：带单位的文案。
+func (u CursorUsage) Amount(v int) string {
+	if u.IsUsage() {
+		return fmt.Sprintf("$%.2f", float64(v)/100)
+	}
+	return fmt.Sprintf("%d 次", v)
+}
+
+// HasCap 判断是否有可计算比例的固定上限。
+//
+// 返回值：Limit>0 且不是无上限账号返回 true。
+func (u CursorUsage) HasCap() bool { return u.Limit > 0 && !u.Unlimited }
+
+// Remaining 返回剩余额度（不小于 0；单位同 Used）。
 //
 // 返回值：Limit-Used，最小为 0。
 func (u CursorUsage) Remaining() int {
@@ -29,11 +66,11 @@ func (u CursorUsage) Remaining() int {
 	return 0
 }
 
-// Percent 返回已用比例 0~1（Limit<=0 时为 0，超额时封顶 1）。
+// Percent 返回已用比例 0~1（没有上限时为 0，超额时封顶 1）。
 //
 // 返回值：已用比例。
 func (u CursorUsage) Percent() float64 {
-	if u.Limit <= 0 {
+	if !u.HasCap() {
 		return 0
 	}
 	p := float64(u.Used) / float64(u.Limit)
@@ -46,14 +83,29 @@ func (u CursorUsage) Percent() float64 {
 	return p
 }
 
-// CycleEnd 返回周期重置时间：周期起点后推一个月。
+// CycleEnd 返回周期重置时间：优先用接口给出的精确时刻，否则取周期起点后推一个月。
 //
-// 返回值：重置时间；起点未知时返回零值。
+// 返回值：重置时间；都未知时返回零值。
 func (u CursorUsage) CycleEnd() time.Time {
+	if !u.CycleEndAt.IsZero() {
+		return u.CycleEndAt
+	}
 	if u.CycleStart.IsZero() {
 		return time.Time{}
 	}
 	return u.CycleStart.AddDate(0, 1, 0)
+}
+
+// UntilReset 返回距离重置还有多久（已过期或未知返回 0）。
+//
+// 参数 now：当前时间。
+// 返回值：剩余时长。
+func (u CursorUsage) UntilReset(now time.Time) time.Duration {
+	end := u.CycleEnd()
+	if end.IsZero() || !end.After(now) {
+		return 0
+	}
+	return end.Sub(now)
 }
 
 // DaysUntilReset 返回距离重置还有多少天（向上取整，已过期返回 0）。
@@ -61,11 +113,10 @@ func (u CursorUsage) CycleEnd() time.Time {
 // 参数 now：当前时间。
 // 返回值：天数。
 func (u CursorUsage) DaysUntilReset(now time.Time) int {
-	end := u.CycleEnd()
-	if end.IsZero() || !end.After(now) {
+	d := u.UntilReset(now)
+	if d <= 0 {
 		return 0
 	}
-	d := end.Sub(now)
 	days := int(d / (24 * time.Hour))
 	if d%(24*time.Hour) > 0 {
 		days++
@@ -73,10 +124,10 @@ func (u CursorUsage) DaysUntilReset(now time.Time) int {
 	return days
 }
 
-// DailyAverage 返回本周期日均消耗次数（按已过去的天数，至少按 1 天算）。
+// DailyAverage 返回本周期日均消耗（按已过去的天数，至少按 1 天算；单位同 Used）。
 //
 // 参数 now：当前时间。
-// 返回值：日均次数。
+// 返回值：日均消耗。
 func (u CursorUsage) DailyAverage(now time.Time) float64 {
 	if u.CycleStart.IsZero() {
 		return 0
@@ -91,9 +142,9 @@ func (u CursorUsage) DailyAverage(now time.Time) float64 {
 // ProjectedExhaust 按日均速度预测额度耗尽时间。
 //
 // 参数 now：当前时间。
-// 返回值：预测耗尽时间与是否有意义（已耗尽返回 now，日均为 0 返回 false）。
+// 返回值：预测耗尽时间与是否有意义（已耗尽返回 now，没有上限或日均为 0 返回 false）。
 func (u CursorUsage) ProjectedExhaust(now time.Time) (time.Time, bool) {
-	if u.Limit <= 0 {
+	if !u.HasCap() {
 		return time.Time{}, false
 	}
 	if u.Used >= u.Limit {
@@ -134,6 +185,7 @@ type CursorEvent struct {
 	ChargedCents   float64   `json:"chargedCents"` // 实际扣费（美分）
 	IsTokenBased   bool      `json:"isTokenBased"`
 	ConversationID string    `json:"conversationId,omitempty"`
+	Account        string    `json:"account,omitempty"` // 所属账号（WorkOS 用户 ID）；旧备份没有该字段
 }
 
 // KindLabel 把原始类型转成易读中文。

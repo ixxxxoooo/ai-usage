@@ -99,7 +99,7 @@ func (a *App) reloadNow() {
 	if a.svc == nil {
 		return
 	}
-	d, err := LoadData(a.svc.Store(), a.now())
+	d, err := LoadData(a.svc.Store(), a.now(), a.state().Cursor.Usage.Account)
 	a.mu.Lock()
 	a.data, a.dataErr = d, err
 	a.mu.Unlock()

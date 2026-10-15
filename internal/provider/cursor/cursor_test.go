@@ -136,9 +136,9 @@ func TestParseUsage(t *testing.T) {
 	if err != nil || u.Used != 359 || u.Limit != 500 || u.CycleStart.Year() != 2026 || u.CycleStart.Month() != 9 {
 		t.Fatalf("%+v %v", u, err)
 	}
-	// 缺 maxRequestUsage 默认 500；只有 numRequests
+	// 缺 maxRequestUsage：额度未知（0），不能臆测成 500；只有 numRequests
 	u, err = ParseUsage([]byte(`{"gpt-4":{"numRequests":7}}`), time.Now())
-	if err != nil || u.Used != 7 || u.Limit != 500 {
+	if err != nil || u.Used != 7 || u.Limit != 0 {
 		t.Errorf("缺字段: %+v %v", u, err)
 	}
 	for _, bad := range []string{`{}`, `not json`, `{"gpt-4":null}`} {
@@ -342,5 +342,78 @@ func TestFetchContextCancel(t *testing.T) {
 	start := time.Now()
 	if _, err := (&Client{BaseURL: srv.URL}).FetchUsage(ctx, testCred); err == nil || time.Since(start) > time.Second {
 		t.Errorf("应快速超时: %v %v", err, time.Since(start))
+	}
+}
+
+// summaryJSON 是 /api/usage-summary 的真实响应样例（个人 Pro，按美元额度，单位美分）。
+const summaryJSON = `{"billingCycleStart":"2026-09-16T02:24:49.000Z","billingCycleEnd":"2026-10-16T02:24:49.000Z","membershipType":"pro","limitType":"user","isUnlimited":false,"individualUsage":{"plan":{"enabled":true,"used":1672,"limit":2000,"remaining":328},"onDemand":{"enabled":false,"used":0,"limit":null,"remaining":null}}}`
+
+// TestParseSummary 验证新计划/团队的美元额度解析，以及精确重置时刻。
+func TestParseSummary(t *testing.T) {
+	u, err := ParseSummary([]byte(summaryJSON), time.Now())
+	if err != nil || !u.IsUsage() || u.Used != 1672 || u.Limit != 2000 || u.Membership != "pro" || u.LimitType != "user" {
+		t.Fatalf("%+v %v", u, err)
+	}
+	if want := time.Date(2026, 10, 16, 2, 24, 49, 0, time.UTC); !u.CycleEnd().Equal(want) {
+		t.Errorf("重置时刻应取接口给出的精确值: %v", u.CycleEnd())
+	}
+	// 团队无上限：Limit 为空 + isUnlimited
+	u, err = ParseSummary([]byte(`{"membershipType":"enterprise","limitType":"team","isUnlimited":true,"individualUsage":{"plan":{"used":530.4,"limit":null},"onDemand":{"used":120}}}`), time.Now())
+	if err != nil || !u.Unlimited || u.HasCap() || u.Used != 530 || u.OnDemand != 120 || u.LimitType != "team" {
+		t.Errorf("团队无上限: %+v %v", u, err)
+	}
+	for _, bad := range []string{`{}`, `not json`} {
+		if _, err := ParseSummary([]byte(bad), time.Now()); !errors.Is(err, ErrBadResponse) {
+			t.Errorf("%q 应为 ErrBadResponse: %v", bad, err)
+		}
+	}
+}
+
+// TestFetchUsageModes 验证 FetchUsage 自动识别口径：老计划按次数，新计划按美元，两者都带精确重置时刻。
+func TestFetchUsageModes(t *testing.T) {
+	serve := func(legacy, summary string) *Client {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/usage", func(w http.ResponseWriter, r *http.Request) {
+			if legacy == "" {
+				http.NotFound(w, r)
+				return
+			}
+			fmt.Fprint(w, legacy)
+		})
+		mux.HandleFunc("/api/usage-summary", func(w http.ResponseWriter, r *http.Request) {
+			if summary == "" {
+				http.NotFound(w, r)
+				return
+			}
+			fmt.Fprint(w, summary)
+		})
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+		return &Client{BaseURL: srv.URL}
+	}
+	cred := Credentials{UserID: "user_A", Token: "a.b.c"}
+	ctx := context.Background()
+
+	// 1) 老计划 + summary：按次数，重置时刻来自 summary，记录账号
+	u, err := serve(usageJSON, summaryJSON).FetchUsage(ctx, cred)
+	if err != nil || u.IsUsage() || u.Used != 359 || u.Limit != 500 || u.Account != "user_A" || u.Membership != "pro" {
+		t.Fatalf("老计划: %+v %v", u, err)
+	}
+	if u.CycleEndAt.IsZero() {
+		t.Error("老计划也应带精确重置时刻")
+	}
+	// 2) 老计划，summary 取不到：仍可用，重置时刻回退为起点+1 月
+	u, err = serve(usageJSON, "").FetchUsage(ctx, cred)
+	if err != nil || u.Used != 359 || !u.CycleEnd().Equal(u.CycleStart.AddDate(0, 1, 0)) {
+		t.Fatalf("summary 缺失: %+v %v", u, err)
+	}
+	// 3) 新计划：/api/usage 没有次数上限 -> 用美元额度
+	u, err = serve(`{"gpt-4":{"numRequests":0,"maxRequestUsage":null}}`, summaryJSON).FetchUsage(ctx, cred)
+	if err != nil || !u.IsUsage() || u.Used != 1672 || u.Limit != 2000 {
+		t.Fatalf("新计划: %+v %v", u, err)
+	}
+	// 4) 两个接口都没有额度信息 -> 明确报错
+	if _, err := serve(`{"gpt-4":{"numRequests":3}}`, "").FetchUsage(ctx, cred); !errors.Is(err, ErrBadResponse) {
+		t.Errorf("无额度信息应报错: %v", err)
 	}
 }

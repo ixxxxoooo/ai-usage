@@ -51,3 +51,7 @@ AIUSAGE_DATA_DIR=$(mktemp -d) "AI Usage.app/Contents/MacOS/AI Usage" \
 ```
 
 `AIUSAGE_DATA_DIR` 会让数据与凭据都落在该目录（凭据用文件而非钥匙串），避免污染真实环境。
+
+## Cursor 账号类型与隔离（v1.1.0）
+
+用量支持次数制与金额制两种口径，明细按账号隔离（schema v2），详见 [CURSOR_PLANS.md](CURSOR_PLANS.md)。

@@ -47,6 +47,8 @@ func barChart(c *ui.Context, key string, data []barDatum, col ui.Color, height f
 	axisLabel := func(_ chart.Side, tick chart.Tick) {
 		ui.Text(c, tick.Label).NoWrap().FontSize(10).TextColor(t.TextMuted)
 	}
+	hov := -1 // 鼠标正悬停的柱子
+	var hovBar ui.Element
 	chart.Plot(c.Key(key), chart.Axes{Left: yTicks, Bottom: xTicks, Label: axisLabel}, func(area ui.Element) {
 		area.Draw(func(p *ui.Painter, r ui.Rect) {
 			for _, tick := range yTicks {
@@ -58,14 +60,33 @@ func barChart(c *ui.Context, key string, data []barDatum, col ui.Color, height f
 			if d.Value <= 0 {
 				continue
 			}
-			bar := chart.Rect(c.Key(fmt.Sprintf("%s-%d", key, i)), x.Band(i), y.Span(0, d.Value)).Radius(3).Tooltip(d.Tip)
+			bar := chart.Rect(c.Key(fmt.Sprintf("%s-%d", key, i)), x.Band(i), y.Span(0, d.Value)).Radius(3).Description(d.Tip)
 			if bar.Hovered() {
 				bar.Background(col)
+				hov, hovBar = i, bar
 			} else {
 				bar.Background(col.Alpha(0.78))
 			}
 		}
 	}).Label(label).Height(height).Gap(6)
+	if hov >= 0 && data[hov].Tip != "" {
+		barTip(c, hovBar, data[hov].Tip)
+	}
+}
+
+// barTip 在被悬停的柱子正上方立刻显示一个提示气泡（不像系统提示要等 0.6 秒），内容如 "10月15日：368 次 · 313 条"。
+//
+// 参数 c：上下文；bar：被悬停的柱子；text：提示文字。
+func barTip(c *ui.Context, bar ui.Element, text string) {
+	t := c.Theme()
+	ui.Overlay(c, func() {
+		tip := ui.Box(c).Absolute().PassThrough().Padding(5, 9).Radius(7).Background(t.Text.Alpha(0.92))
+		tip.Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.25))
+		tip.AttachTo(bar, ui.AnchorTop, ui.AnchorBottom).Margin(0, 0, 6, 0)
+		tip.Children(func() {
+			ui.Text(c, text).FontSize(12).TextColor(t.Background).NoWrap()
+		})
+	})
 }
 
 // shareBar 画一行「名称 + 占比条 + 数值」，用于按模型占比。

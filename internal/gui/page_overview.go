@@ -62,11 +62,14 @@ func (a *App) bigCursorCard(c *ui.Context, vm CursorVM, st service.State) {
 			return
 		}
 		ui.Row(c).Gap(18).AlignItems(ui.Center).Children(func() {
-			ring(c, "ov-ring", vm.Frac, 116, 11, levelColor(t, vm.Level, brand), vm.Used, "/ "+vm.Limit+" 次")
+			ring(c, "ov-ring", vm.Frac, 116, 11, levelColor(t, vm.Level, brand), vm.RingMain, vm.RingSubFull)
 			ui.Column(c).Grow(1).Gap(4).Children(func() {
 				ui.Text(c, vm.Remain).FontSize(20).Bold().SingleLine()
 				hint(c, vm.Reset).SingleLine()
 				hint(c, vm.Average+" · 已用 "+vm.Percent).SingleLine()
+				if vm.Plan != "" {
+					hint(c, vm.Plan).SingleLine()
+				}
 				if vm.Exhaust != "" {
 					ui.Text(c, vm.Exhaust).FontSize(12).TextColor(t.Warning)
 				}

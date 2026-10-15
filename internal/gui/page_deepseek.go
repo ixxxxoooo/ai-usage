@@ -166,6 +166,7 @@ func (a *App) deepseekPage(c *ui.Context, st service.State) {
 		sub += " · " + vm.MonthLabel + "已用 " + vm.MonthCost
 	}
 	pageTitle(c, "DeepSeek 账单", sub, func() {
+		linkButton(c, "ds-web", "在官网查看", DeepSeekUsageURL)
 		if ui.Button(c.Key("ds-export"), "导出 CSV").Disabled(len(view.Rows) == 0).Clicked() {
 			a.exportDeepSeekCSV(view.Rows)
 		}

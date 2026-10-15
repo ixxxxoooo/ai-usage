@@ -3,6 +3,7 @@ package gui
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -154,9 +155,10 @@ func (a *App) cursorPage(c *ui.Context, st service.State) {
 
 	sub := vm.Events
 	if vm.Has {
-		sub = fmt.Sprintf("本周期已用 %s / %s 次 · %s", vm.Used, vm.Limit, vm.Reset)
+		sub = cursorSubtitle(vm)
 	}
 	pageTitle(c, "Cursor 明细", sub, func() {
+		linkButton(c, "cu-web", "在官网查看", CursorUsageURL)
 		if ui.Button(c.Key("cu-export"), "导出 CSV").Disabled(len(view.Rows) == 0).Clicked() {
 			a.exportCursorCSV(view.Rows)
 		}
@@ -175,7 +177,7 @@ func (a *App) cursorPage(c *ui.Context, st service.State) {
 		ui.Row(c).Gap(10).Children(func() {
 			ui.Segmented(c.Key("cu-range"), &a.ui.cRange, cursorRanges...).Label("时间范围")
 			models := append([]string{allModels}, data.Models...)
-			ui.Select(c.Key("cu-model"), &a.ui.cModel, models).Label("模型").Width(210)
+			scrollSelect(c.Key("cu-model"), &a.ui.cModel, models, 210, "模型")
 			ui.Spacer(c)
 			hint(c, fmt.Sprintf("共 %s 条", util.FormatInt(int64(len(view.Rows))))).SingleLine()
 		})
@@ -214,6 +216,29 @@ func (a *App) cursorPage(c *ui.Context, st service.State) {
 		})
 		a.cursorTable(c, view)
 	})
+}
+
+// cursorSubtitle 生成 Cursor 页副标题：套餐 · 本周期已用 · 精确重置时刻与倒计时。
+func cursorSubtitle(vm CursorVM) string {
+	var parts []string
+	if vm.Plan != "" {
+		parts = append(parts, vm.Plan)
+	}
+	switch {
+	case vm.IsUsage && vm.Limit != "无上限" && vm.Limit != "—":
+		parts = append(parts, fmt.Sprintf("本周期已用 %s / %s", vm.Used, vm.Limit))
+	case vm.IsUsage:
+		parts = append(parts, "本周期已用 "+vm.Used+"（"+vm.Limit+"）")
+	default:
+		parts = append(parts, fmt.Sprintf("本周期已用 %s / %s 次", vm.Used, vm.Limit))
+	}
+	if vm.OnDemand != "" {
+		parts = append(parts, "按需已用 "+vm.OnDemand)
+	}
+	if vm.Reset != "" {
+		parts = append(parts, vm.Reset)
+	}
+	return strings.Join(parts, " · ")
 }
 
 // summaryCard 画汇总小卡片：小标题 + 数值。

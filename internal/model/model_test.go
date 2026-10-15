@@ -145,3 +145,40 @@ func TestSettingsNormalize(t *testing.T) {
 		t.Errorf("合法值不应被改: %+v", ok)
 	}
 }
+
+// TestCursorUsageModes 旧版次数制与新版金额制：展示、剩余、百分比、有无上限都按各自口径计算。
+func TestCursorUsageModes(t *testing.T) {
+	req := CursorUsage{Mode: CursorModeRequests, Used: 359, Limit: 500}
+	if req.IsUsage() || !req.HasCap() || req.Remaining() != 141 || req.Amount(359) != "359 次" {
+		t.Errorf("次数制: %+v %q", req, req.Amount(359))
+	}
+	usage := CursorUsage{Mode: CursorModeUsage, Used: 1672, Limit: 2000}
+	if !usage.IsUsage() || usage.Amount(1672) != "$16.72" || usage.Remaining() != 328 || usage.Percent() < 0.835 || usage.Percent() > 0.837 {
+		t.Errorf("金额制: %q %d %v", usage.Amount(1672), usage.Remaining(), usage.Percent())
+	}
+	for name, u := range map[string]CursorUsage{
+		"无限额": {Mode: CursorModeUsage, Used: 100, Unlimited: true},
+		"未提供": {Mode: CursorModeRequests, Used: 100},
+	} {
+		if u.HasCap() {
+			t.Errorf("%s 不应有固定上限", name)
+		}
+	}
+}
+
+// TestCursorUsageCycleEnd 重置时刻优先用接口给的精确结束时间，没有才按开始时间 + 1 个月推算。
+func TestCursorUsageCycleEnd(t *testing.T) {
+	start := time.Date(2026, 9, 16, 8, 0, 0, 0, time.UTC)
+	u := CursorUsage{CycleStart: start}
+	if got := u.CycleEnd(); !got.Equal(time.Date(2026, 10, 16, 8, 0, 0, 0, time.UTC)) {
+		t.Errorf("推算结束时间: %v", got)
+	}
+	exact := time.Date(2026, 10, 16, 10, 24, 37, 0, time.UTC)
+	u.CycleEndAt = exact
+	if got := u.CycleEnd(); !got.Equal(exact) {
+		t.Errorf("应优先用精确结束时间: %v", got)
+	}
+	if d := u.UntilReset(exact.Add(-90 * time.Minute)); d != 90*time.Minute {
+		t.Errorf("距离重置 %v", d)
+	}
+}

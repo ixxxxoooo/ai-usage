@@ -16,7 +16,7 @@ func cursorState(used int) service.CursorState {
 	return service.CursorState{
 		ProviderState: service.ProviderState{Status: service.StatusOK, UpdatedAt: testNow.Add(-3 * time.Minute)},
 		HasUsage:      true,
-		Usage:         model.CursorUsage{Used: used, Limit: 500, CycleStart: time.Date(2026, 9, 16, 8, 0, 0, 0, time.Local)},
+		Usage:         model.CursorUsage{Account: "acct", Used: used, Limit: 500, CycleStart: time.Date(2026, 9, 16, 8, 0, 0, 0, time.Local)},
 		EventCount:    1234,
 	}
 }
@@ -27,7 +27,7 @@ func TestBuildCursorVM(t *testing.T) {
 	if vm.Used != "359" || vm.Limit != "500" || vm.Remain != "剩余 141 次" || vm.Percent != "72%" || vm.Level != LevelOK {
 		t.Errorf("%+v", vm)
 	}
-	if !strings.Contains(vm.Reset, "10月16日重置") || !strings.Contains(vm.Reset, "2 天后") {
+	if vm.Reset != "10/16 08:00 重置 · 还剩 1天17时" {
 		t.Errorf("reset: %q", vm.Reset)
 	}
 	if vm.Updated != "3 分钟前" || vm.Events != "1,234 条明细" {

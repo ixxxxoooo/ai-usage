@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -66,7 +67,7 @@ func TestCursorEvents(t *testing.T) {
 	if n != 1 {
 		t.Errorf("重复写入只应新增 1 条，实际 %d", n)
 	}
-	if c, _ := s.CursorEventCount(); c != 4 {
+	if c, _ := s.CursorEventCount(""); c != 4 {
 		t.Errorf("count=%d", c)
 	}
 	all, _ := s.CursorEvents(EventQuery{})
@@ -88,14 +89,14 @@ func TestCursorEvents(t *testing.T) {
 	if len(got) != 1 {
 		t.Errorf("limit: %d", len(got))
 	}
-	if l, _ := s.LatestCursorEventTime(); !l.Equal(t0) {
+	if l, _ := s.LatestCursorEventTime(""); !l.Equal(t0) {
 		t.Errorf("latest: %v", l)
 	}
-	if ms, _ := s.CursorModels(); len(ms) != 2 || ms[0] != "a" {
+	if ms, _ := s.CursorModels(""); len(ms) != 2 || ms[0] != "a" {
 		t.Errorf("models: %v", ms)
 	}
 	empty, _ := openTemp(t)
-	if l, _ := empty.LatestCursorEventTime(); !l.IsZero() {
+	if l, _ := empty.LatestCursorEventTime(""); !l.IsZero() {
 		t.Error("空库 latest 应为零值")
 	}
 }
@@ -179,7 +180,7 @@ func TestPersistenceAcrossReopen(t *testing.T) {
 	if g, _ := s2.GetSettings(); g.RefreshMinutes != 30 {
 		t.Errorf("设置丢失: %+v", g)
 	}
-	if c, _ := s2.CursorEventCount(); c != 2 {
+	if c, _ := s2.CursorEventCount(""); c != 2 {
 		t.Errorf("明细丢失: %d", c)
 	}
 	if r, _ := s2.DeepSeekDaily("", ""); len(r) != 1 || r[0].Cost != 1 {
@@ -227,7 +228,7 @@ func TestImportDatasetMerge(t *testing.T) {
 	if err != nil || res.EventsAdded != 0 || res.EventsSkipped != 2 || res.SnapshotsAdded != 0 {
 		t.Fatalf("重复导入应不新增: %+v %v", res, err)
 	}
-	if c, _ := s.CursorEventCount(); c != 2 {
+	if c, _ := s.CursorEventCount(""); c != 2 {
 		t.Errorf("明细数 %d", c)
 	}
 	if r, _ := s.DeepSeekDaily("", ""); len(r) != 1 {
@@ -306,7 +307,7 @@ func TestWipe(t *testing.T) {
 	if err := s.Wipe(); err != nil {
 		t.Fatal(err)
 	}
-	if c, _ := s.CursorEventCount(); c != 0 {
+	if c, _ := s.CursorEventCount(""); c != 0 {
 		t.Error("明细未清空")
 	}
 	s.Close()
@@ -324,5 +325,91 @@ func TestMemoryStore(t *testing.T) {
 	defer s.Close()
 	if n, err := s.UpsertCursorEvents([]model.CursorEvent{ev(0, "a")}); err != nil || n != 1 {
 		t.Errorf("%d %v", n, err)
+	}
+}
+
+// TestMigrateV1ToV2ClearsMixedEvents v1 库升级到 v2：加 account 列，并清掉无法归属账号的旧明细。
+func TestMigrateV1ToV2ClearsMixedEvents(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "v1.db")
+	old, err := sql.Open("sqlite", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`INSERT INTO kv VALUES('schema_version','1')`,
+		`CREATE TABLE cursor_events (key TEXT PRIMARY KEY, ts INTEGER NOT NULL, model TEXT NOT NULL, kind TEXT NOT NULL,
+			requests REAL NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_write INTEGER NOT NULL,
+			cache_read INTEGER NOT NULL, total_cents REAL NOT NULL, charged_cents REAL NOT NULL, is_token INTEGER NOT NULL, conversation_id TEXT NOT NULL)`,
+		`INSERT INTO cursor_events VALUES('old1',1,'m','K',1,0,0,0,0,0,0,0,'c')`,
+		`CREATE TABLE deepseek_daily (date TEXT NOT NULL, model TEXT NOT NULL, currency TEXT NOT NULL, cache_hit INTEGER NOT NULL,
+			cache_miss INTEGER NOT NULL, output INTEGER NOT NULL, requests INTEGER NOT NULL, cost REAL NOT NULL, PRIMARY KEY (date, model, currency))`,
+		`CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, at INTEGER NOT NULL, payload TEXT NOT NULL)`,
+	} {
+		if _, err := old.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old.Close()
+
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if n, _ := s.CursorEventCount(""); n != 0 {
+		t.Errorf("旧明细应被清掉，剩 %d", n)
+	}
+	e := ev(1, "m")
+	e.Account = "user_A"
+	if _, err := s.UpsertCursorEvents([]model.CursorEvent{e}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.CursorEventCount("user_A"); n != 1 {
+		t.Errorf("升级后应能按账号写入: %d", n)
+	}
+	// 重复打开（已是 v2）不应再清数据
+	s.Close()
+	s2, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if n, _ := s2.CursorEventCount("user_A"); n != 1 {
+		t.Errorf("v2 重开不应丢数据: %d", n)
+	}
+}
+
+// TestEventsScopedByAccount 明细查询、条数、最新时间、模型列表都按账号隔离；导入旧备份（无账号）归到当前账号。
+func TestEventsScopedByAccount(t *testing.T) {
+	s, _ := openTemp(t)
+	a, b := ev(1, "ma"), ev(2, "mb")
+	a.Account, b.Account = "A", "B"
+	if _, err := s.UpsertCursorEvents([]model.CursorEvent{a, b}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.CursorEvents(EventQuery{Account: "A"}); len(got) != 1 || got[0].Model != "ma" || got[0].Account != "A" {
+		t.Errorf("A: %+v", got)
+	}
+	if all, _ := s.CursorEvents(EventQuery{}); len(all) != 2 {
+		t.Errorf("不限账号应返回全部: %d", len(all))
+	}
+	if n, _ := s.CursorEventCount("B"); n != 1 {
+		t.Errorf("B 条数 %d", n)
+	}
+	if m, _ := s.CursorModels("B"); len(m) != 1 || m[0] != "mb" {
+		t.Errorf("B 模型 %v", m)
+	}
+	if ts, _ := s.LatestCursorEventTime("A"); !ts.Equal(a.Time.Truncate(time.Millisecond)) {
+		t.Errorf("A 最新时间 %v", ts)
+	}
+	// 旧备份里的事件没有账号 -> 归到 kv 里记录的当前账号
+	_ = s.SetJSON("cursor_account", "A")
+	legacy := ev(3, "mold")
+	if _, err := s.ImportDataset(Dataset{CursorEvents: []model.CursorEvent{legacy}}, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.CursorEvents(EventQuery{Account: "A", Model: "mold"}); len(got) != 1 {
+		t.Errorf("无账号事件应归当前账号 A: %d", len(got))
 	}
 }

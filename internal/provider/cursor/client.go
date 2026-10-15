@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -130,7 +131,7 @@ func ParseUsage(body []byte, now time.Time) (model.CursorUsage, error) {
 	if r.GPT4 == nil {
 		return model.CursorUsage{}, fmt.Errorf("%w：缺少 gpt-4 用量项", ErrBadResponse)
 	}
-	u := model.CursorUsage{Limit: 500, FetchedAt: now}
+	u := model.CursorUsage{Mode: model.CursorModeRequests, FetchedAt: now}
 	switch {
 	case r.GPT4.NumRequestsTotal != nil:
 		u.Used = *r.GPT4.NumRequestsTotal
@@ -148,23 +149,118 @@ func ParseUsage(body []byte, now time.Time) (model.CursorUsage, error) {
 	return u, nil
 }
 
-// FetchUsage 获取当前周期的用量（已用次数 / 总额度 / 周期起点）。
+// summaryPlan 是 usage-summary 里的一项额度（单位：美分）。
+type summaryPlan struct {
+	Enabled bool       `json:"enabled"`
+	Used    *flexFloat `json:"used"`
+	Limit   *flexFloat `json:"limit"`
+}
+
+// summaryResponse 是 /api/usage-summary 的响应（新计划/团队按美元额度计）。
+type summaryResponse struct {
+	BillingCycleStart string `json:"billingCycleStart"`
+	BillingCycleEnd   string `json:"billingCycleEnd"`
+	MembershipType    string `json:"membershipType"`
+	LimitType         string `json:"limitType"`
+	IsUnlimited       bool   `json:"isUnlimited"`
+	IndividualUsage   struct {
+		Plan     *summaryPlan `json:"plan"`
+		OnDemand *summaryPlan `json:"onDemand"`
+	} `json:"individualUsage"`
+}
+
+// ParseSummary 解析 /api/usage-summary 响应体（新计划/团队：按美元额度计，单位美分）。
+//
+// 参数 body：响应 JSON；now：用于填写抓取时间。
+// 返回值：用量快照（Mode=usage）；缺少额度信息返回 ErrBadResponse。
+func ParseSummary(body []byte, now time.Time) (model.CursorUsage, error) {
+	var r summaryResponse
+	if err := json.Unmarshal(body, &r); err != nil {
+		return model.CursorUsage{}, fmt.Errorf("%w：%v", ErrBadResponse, err)
+	}
+	plan := r.IndividualUsage.Plan
+	if plan == nil && r.BillingCycleEnd == "" && r.MembershipType == "" {
+		return model.CursorUsage{}, fmt.Errorf("%w：缺少额度信息", ErrBadResponse)
+	}
+	u := model.CursorUsage{
+		Mode: model.CursorModeUsage, FetchedAt: now,
+		Membership: r.MembershipType, LimitType: r.LimitType, Unlimited: r.IsUnlimited,
+	}
+	if plan != nil {
+		if plan.Used != nil {
+			u.Used = int(float64(*plan.Used) + 0.5)
+		}
+		if plan.Limit != nil && *plan.Limit > 0 {
+			u.Limit = int(float64(*plan.Limit) + 0.5)
+		}
+	}
+	if od := r.IndividualUsage.OnDemand; od != nil && od.Used != nil {
+		u.OnDemand = int(float64(*od.Used) + 0.5)
+	}
+	if t, err := time.Parse(time.RFC3339, r.BillingCycleStart); err == nil {
+		u.CycleStart = t
+	}
+	if t, err := time.Parse(time.RFC3339, r.BillingCycleEnd); err == nil {
+		u.CycleEndAt = t
+	}
+	return u, nil
+}
+
+// get 发 GET 请求并校验状态，返回响应体。
+func (c *Client) get(ctx context.Context, path string, cred Credentials) ([]byte, error) {
+	req, err := c.newRequest("GET", path, nil, cred)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := httpx.Do(ctx, c.httpClient(), req)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkStatus(resp); err != nil {
+		return nil, err
+	}
+	return resp.Body, nil
+}
+
+// FetchUsage 获取当前周期的用量，自动识别计费口径：
+//   - 老计划（/api/usage 给出 maxRequestUsage，如 500）：按次数计；
+//   - 新计划/团队（没有次数上限）：按 /api/usage-summary 的美元额度计。
+//
+// 两种口径都会用 usage-summary 补上精确的重置时刻与套餐信息（取不到不影响主流程）。
 //
 // 参数 ctx：上下文；cred：凭据。
 // 返回值：用量快照。
 func (c *Client) FetchUsage(ctx context.Context, cred Credentials) (model.CursorUsage, error) {
-	req, err := c.newRequest("GET", "/api/usage?user="+url.QueryEscape(cred.UserID), nil, cred)
-	if err != nil {
-		return model.CursorUsage{}, err
+	var legacy model.CursorUsage
+	body, lerr := c.get(ctx, "/api/usage?user="+url.QueryEscape(cred.UserID), cred)
+	if lerr == nil {
+		legacy, lerr = ParseUsage(body, time.Now())
 	}
-	resp, err := httpx.Do(ctx, c.httpClient(), req)
-	if err != nil {
-		return model.CursorUsage{}, err
+	// 登录失效/限流时没必要再请求第二个接口
+	if errors.Is(lerr, ErrUnauthorized) || errors.Is(lerr, ErrForbidden) || errors.Is(lerr, ErrRateLimited) {
+		return model.CursorUsage{}, lerr
 	}
-	if err := checkStatus(resp); err != nil {
-		return model.CursorUsage{}, err
+	var sum model.CursorUsage
+	sbody, serr := c.get(ctx, "/api/usage-summary", cred)
+	if serr == nil {
+		sum, serr = ParseSummary(sbody, time.Now())
 	}
-	return ParseUsage(resp.Body, time.Now())
+	var u model.CursorUsage
+	switch {
+	case lerr == nil && legacy.Limit > 0:
+		u = legacy
+		if serr == nil {
+			u.CycleEndAt, u.Membership, u.LimitType = sum.CycleEndAt, sum.Membership, sum.LimitType
+		}
+	case serr == nil:
+		u = sum
+	case lerr != nil:
+		return model.CursorUsage{}, lerr
+	default:
+		return model.CursorUsage{}, fmt.Errorf("%w：没有识别到额度信息", ErrBadResponse)
+	}
+	u.Account = cred.UserID
+	return u, nil
 }
 
 // FetchEmail 获取账号邮箱（仅用于界面展示，失败不影响主流程）。

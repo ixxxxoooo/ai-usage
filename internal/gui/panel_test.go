@@ -30,7 +30,7 @@ func seedEvents() []model.CursorEvent {
 	mk := func(i int, at time.Time, m string, req float64, tokens int64, cents float64) model.CursorEvent {
 		return model.CursorEvent{
 			Key: fmt.Sprintf("k%d", i), Time: at, Model: m, Kind: "USAGE_EVENT_KIND_INCLUDED_IN_PRO",
-			Requests: req, InputTokens: tokens, OutputTokens: tokens / 10, TotalCents: cents,
+			Requests: req, InputTokens: tokens, OutputTokens: tokens / 10, TotalCents: cents, Account: "acct",
 		}
 	}
 	return []model.CursorEvent{
@@ -77,6 +77,7 @@ func newPanelEnv(t *testing.T) *panelEnv {
 	a.SetClock(func() time.Time { return testNow })
 	a.Attach(svc)
 	a.stateFn = func() service.State { s := fullState(); s.Settings = svc.Settings(); return s }
+	a.reloadNow() // 明细按当前账号加载，状态注入后需要重新加载
 	a.hk = hooks{
 		saveFile: func(title, name string) (string, error) {
 			if e.save == "" {

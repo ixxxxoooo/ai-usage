@@ -61,3 +61,7 @@ Not affiliated with Cursor (Anysphere) or DeepSeek. It uses the same unofficial 
 ## License
 
 [MIT](LICENSE) © 2026 ygw
+
+### Cursor accounts that are not "500 requests"
+
+Team and new-plan accounts are measured by a dollar allowance; accounts without a fixed cap only show usage. The reset time is accurate to the minute, and switching accounts only shows the current account's events. See [docs/CURSOR_PLANS.md](docs/CURSOR_PLANS.md) (Chinese).

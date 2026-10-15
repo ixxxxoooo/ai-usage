@@ -27,8 +27,14 @@ const (
 // @author ygw
 type CursorVM struct {
 	Has         bool    // 是否有用量数据
-	Used        string  // 已用，如 "359"
-	Limit       string  // 总量，如 "500"
+	Used        string  // 已用，如 "359"（老计划）或 "$16.72"（新计划）
+	Limit       string  // 总量，如 "500" / "$20.00" / "无上限"
+	RingMain    string  // 环中间的大字：老计划为已用次数，新计划为已用百分比
+	RingSub     string  // 环中间的小字，如 "/ 500" 或 "已用"
+	RingSubFull string  // 概览页环里的小字，如 "/ 500 次"
+	Plan        string  // 套餐说明，如 "Pro · 个人额度"；未知为空
+	OnDemand    string  // 按需（超出套餐）已用，如 "$1.20"；没有为空
+	IsUsage     bool    // 是否按美元额度计（新计划/团队）
 	Remain      string  // 剩余文案，如 "剩余 141 次"
 	Frac        float64 // 已用比例 0~1
 	Percent     string  // 如 "72%"
@@ -61,9 +67,29 @@ func BuildCursorVM(s service.CursorState, now time.Time) CursorVM {
 		return vm
 	}
 	u := s.Usage
-	vm.Used = fmt.Sprintf("%d", u.Used)
-	vm.Limit = fmt.Sprintf("%d", u.Limit)
-	vm.Remain = fmt.Sprintf("剩余 %d 次", u.Remaining())
+	vm.IsUsage = u.IsUsage()
+	vm.Plan = planLabel(u)
+	if u.OnDemand > 0 {
+		vm.OnDemand = fmt.Sprintf("$%.2f", float64(u.OnDemand)/100)
+	}
+	if vm.IsUsage {
+		vm.Used = fmt.Sprintf("$%.2f", float64(u.Used)/100)
+		switch {
+		case u.HasCap():
+			vm.Limit = fmt.Sprintf("$%.2f", float64(u.Limit)/100)
+			vm.Remain = "剩余 " + u.Amount(u.Remaining())
+		case u.Unlimited:
+			vm.Limit, vm.Remain = "无上限", "无固定上限"
+		default:
+			vm.Limit, vm.Remain = "—", "未设固定上限"
+		}
+		vm.Average = fmt.Sprintf("日均 %s", u.Amount(int(u.DailyAverage(now)+0.5)))
+	} else {
+		vm.Used = fmt.Sprintf("%d", u.Used)
+		vm.Limit = fmt.Sprintf("%d", u.Limit)
+		vm.Remain = fmt.Sprintf("剩余 %d 次", u.Remaining())
+		vm.Average = fmt.Sprintf("日均 %.1f 次", u.DailyAverage(now))
+	}
 	vm.Frac = u.Percent()
 	vm.Percent = fmt.Sprintf("%d%%", int(vm.Frac*100+0.5))
 	vm.Level = LevelOK
@@ -73,19 +99,16 @@ func BuildCursorVM(s service.CursorState, now time.Time) CursorVM {
 	case vm.Frac >= 0.8:
 		vm.Level = LevelWarn
 	}
-	if end := u.CycleEnd(); !end.IsZero() {
-		days := u.DaysUntilReset(now)
-		when := fmt.Sprintf("%d 天后", days)
-		switch days {
-		case 0:
-			when = "即将"
-		case 1:
-			when = "明天"
-		}
-		vm.Reset = fmt.Sprintf("%d月%d日重置 · %s", int(end.Month()), end.Day(), when)
+	vm.Reset = ResetText(u, now)
+	switch {
+	case !vm.IsUsage:
+		vm.RingMain, vm.RingSub, vm.RingSubFull = vm.Used, "/ "+vm.Limit, "/ "+vm.Limit+" 次"
+	case u.HasCap():
+		vm.RingMain, vm.RingSub, vm.RingSubFull = vm.Percent, "已用", "已用 · 共 "+vm.Limit
+	default:
+		vm.RingMain, vm.RingSub, vm.RingSubFull = vm.Used, "已用", "已用 · "+vm.Limit
 	}
-	vm.Average = fmt.Sprintf("日均 %.1f 次", u.DailyAverage(now))
-	if u.Used >= u.Limit && u.Limit > 0 {
+	if u.HasCap() && u.Used >= u.Limit {
 		vm.Exhaust = "本周期额度已用完"
 		vm.WarnExhaust = true
 	} else if t, ok := u.ProjectedExhaust(now); ok && u.WillExhaustBeforeReset(now) {
@@ -166,7 +189,11 @@ func BuildDeepSeekVM(s service.DeepSeekState, st model.Settings, now time.Time) 
 func TrayTitle(st service.State) string {
 	cur, ds := "", ""
 	if st.Cursor.HasUsage {
-		cur = fmt.Sprintf("%d/%d", st.Cursor.Usage.Used, st.Cursor.Usage.Limit)
+		cv := BuildCursorVM(st.Cursor, time.Now())
+		cur = cv.Used + "/" + cv.Limit
+		if cv.IsUsage && !st.Cursor.Usage.HasCap() {
+			cur = cv.Used
+		}
 	}
 	if st.DeepSeek.HasBalance {
 		b := st.DeepSeek.Balance
@@ -247,4 +274,46 @@ func RefreshedText(st service.State, now time.Time) string {
 		return "尚未获取数据"
 	}
 	return "更新于 " + util.FormatRelative(latest, now)
+}
+
+// ResetText 生成精确到分钟的重置文案，如 "10/16 10:24 重置 · 还剩 12时5分"。
+//
+// 重置时刻取接口给出的精确值（取不到时用周期起点 + 1 个月），按本机时区显示。
+//
+// 参数 u：用量；now：当前时间。
+// 返回值：文案；重置时刻未知返回空串。
+func ResetText(u model.CursorUsage, now time.Time) string {
+	end := u.CycleEnd()
+	if end.IsZero() {
+		return ""
+	}
+	end = end.In(now.Location())
+	left := u.UntilReset(now)
+	if left <= 0 {
+		return fmt.Sprintf("%d/%d %02d:%02d 已到重置时间", int(end.Month()), end.Day(), end.Hour(), end.Minute())
+	}
+	return fmt.Sprintf("%d/%d %02d:%02d 重置 · 还剩 %s", int(end.Month()), end.Day(), end.Hour(), end.Minute(), util.FormatCountdown(left))
+}
+
+// planLabel 生成套餐说明，如 "Pro · 个人额度"、"Team · 团队额度"。
+func planLabel(u model.CursorUsage) string {
+	names := map[string]string{"free": "Free", "free_trial": "试用", "pro": "Pro", "pro_plus": "Pro+", "ultra": "Ultra", "business": "Business", "team": "Team", "enterprise": "Enterprise"}
+	name := names[u.Membership]
+	if name == "" {
+		name = u.Membership
+	}
+	scope := ""
+	switch u.LimitType {
+	case "team":
+		scope = "团队额度"
+	case "user":
+		scope = "个人额度"
+	}
+	switch {
+	case name != "" && scope != "":
+		return name + " · " + scope
+	case name != "":
+		return name
+	}
+	return scope
 }

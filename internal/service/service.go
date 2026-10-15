@@ -104,7 +104,7 @@ func (s *Service) restore() {
 		s.state.Cursor.Usage, s.state.Cursor.HasUsage = u, true
 		s.state.Cursor.UpdatedAt = u.FetchedAt
 	}
-	if n, err := s.cfg.Store.CursorEventCount(); err == nil {
+	if n, err := s.cfg.Store.CursorEventCount(s.state.Cursor.Usage.Account); err == nil {
 		s.state.Cursor.EventCount = n
 	}
 	s.state.Cursor.Status = StatusIdle
@@ -378,14 +378,23 @@ func (s *Service) refreshCursor(ctx context.Context) {
 		s.update(func(x *State) { s.applyFailure(&x.Cursor.ProviderState, err) })
 		return
 	}
+	// 账号切换（在 Cursor 里换了登录）：旧账号的用量与明细不能继续展示在新账号下
+	account := cred.UserID
+	if prev := s.State().Cursor.Usage.Account; prev != "" && prev != account {
+		s.update(func(x *State) {
+			x.Cursor.Usage, x.Cursor.HasUsage, x.Cursor.EventCount, x.Cursor.EventsErr = model.CursorUsage{}, false, 0, ""
+		})
+	}
+	_ = s.cfg.Store.SetJSON("cursor_account", account)
 	usage, err := s.cfg.Cursor.FetchUsage(ctx, cred)
 	if err != nil {
 		s.update(func(x *State) { x.Cursor.CredSource = src; s.applyFailure(&x.Cursor.ProviderState, err) })
 		return
 	}
 	usage.FetchedAt = s.cfg.Now()
-	if prev := s.State().Cursor.Usage.Email; prev != "" {
-		usage.Email = prev // 邮箱几乎不变，1 分钟刷新时不必每次都多请求一次
+	usage.Account = account
+	if prev := s.State().Cursor.Usage; prev.Email != "" && prev.Account == account {
+		usage.Email = prev.Email // 同一账号邮箱几乎不变，1 分钟刷新时不必每次都多请求一次
 	} else if email, e := s.cfg.Cursor.FetchEmail(ctx, cred); e == nil {
 		usage.Email = email
 	}
@@ -393,7 +402,7 @@ func (s *Service) refreshCursor(ctx context.Context) {
 	_, _ = s.cfg.Store.AddSnapshot("cursor", usage.FetchedAt, usage, 30*time.Minute)
 
 	eventsErr := s.syncCursorEvents(ctx, cred, usage)
-	count, _ := s.cfg.Store.CursorEventCount()
+	count, _ := s.cfg.Store.CursorEventCount(account)
 	s.update(func(x *State) {
 		x.Cursor.Usage, x.Cursor.HasUsage = usage, true
 		x.Cursor.CredSource, x.Cursor.EventCount = src, count
@@ -407,7 +416,7 @@ func (s *Service) refreshCursor(ctx context.Context) {
 //
 // 返回值：失败说明（成功为空）。
 func (s *Service) syncCursorEvents(ctx context.Context, cred cursor.Credentials, usage model.CursorUsage) string {
-	latest, err := s.cfg.Store.LatestCursorEventTime()
+	latest, err := s.cfg.Store.LatestCursorEventTime(cred.UserID)
 	if err != nil {
 		return "读取本地明细失败：" + err.Error()
 	}
@@ -422,6 +431,9 @@ func (s *Service) syncCursorEvents(ctx context.Context, cred cursor.Credentials,
 	save := func(since, until time.Time) string {
 		evs, err := s.cfg.Cursor.FetchEvents(ctx, cred, since, until, nil)
 		if len(evs) > 0 {
+			for i := range evs {
+				evs[i].Account = cred.UserID
+			}
 			if _, e := s.cfg.Store.UpsertCursorEvents(evs); e != nil {
 				return "保存明细失败：" + e.Error()
 			}
@@ -448,7 +460,7 @@ func (s *Service) syncCursorEvents(ctx context.Context, cred cursor.Credentials,
 // checkCursorThresholds 在越过设定百分比时发送一次通知（同一周期同一阈值只通知一次）。
 func (s *Service) checkCursorThresholds(u model.CursorUsage) {
 	st := s.State().Settings
-	if !st.NotifyEnabled || s.cfg.Notify == nil || u.Limit <= 0 {
+	if !st.NotifyEnabled || s.cfg.Notify == nil || !u.HasCap() {
 		return
 	}
 	notified := map[string]bool{}
@@ -456,12 +468,12 @@ func (s *Service) checkCursorThresholds(u model.CursorUsage) {
 	changed := false
 	pct := float64(u.Used) * 100 / float64(u.Limit)
 	for _, th := range st.NotifyCursorPercent {
-		key := fmt.Sprintf("cursor:%d:%s", th, u.CycleStart.Format("20060102"))
+		key := fmt.Sprintf("cursor:%s:%d:%s", u.Account, th, u.CycleStart.Format("20060102"))
 		if pct >= float64(th) && !notified[key] {
 			notified[key] = true
 			changed = true
 			s.cfg.Notify(key, "Cursor 用量提醒",
-				fmt.Sprintf("本周期已用 %d / %d 次（%.0f%%），剩余 %d 次。", u.Used, u.Limit, pct, u.Remaining()))
+				fmt.Sprintf("本周期已用 %s / %s（%.0f%%），剩余 %s。", u.Amount(u.Used), u.Amount(u.Limit), pct, u.Amount(u.Remaining())))
 		}
 	}
 	if changed {
@@ -753,7 +765,10 @@ func (s *Service) TestCursor(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("连接成功（%s）：已用 %d / %d 次", src, u.Used, u.Limit), nil
+	if !u.HasCap() {
+		return fmt.Sprintf("连接成功（%s）：本周期已用 %s（无固定上限）", src, u.Amount(u.Used)), nil
+	}
+	return fmt.Sprintf("连接成功（%s）：已用 %s / %s", src, u.Amount(u.Used), u.Amount(u.Limit)), nil
 }
 
 // TestDeepSeek 测试 DeepSeek 连接（优先网页 token，其次 API Key）。

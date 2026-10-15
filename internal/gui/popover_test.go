@@ -127,3 +127,36 @@ func TestPopoverFitsHeight(t *testing.T) {
 		}
 	}
 }
+
+// TestPopoverCardsOpenPanelPages 点浮窗里的 Cursor / DeepSeek 卡片，应打开大面板并跳到对应页面。
+func TestPopoverCardsOpenPanelPages(t *testing.T) {
+	a := newTestApp(fullState())
+	var opened []string
+	a.hk.openPage = func(page string) { opened = append(opened, page) }
+	tt := ui.NewTester(a.popoverView, PopoverWidth, PopoverHeight)
+	if err := tt.Click("剩余 141 次"); err != nil { // Cursor 卡片里的文字
+		t.Fatal(err)
+	}
+	if err := tt.Click("剩余余额"); err != nil { // DeepSeek 卡片里的文字
+		t.Fatal(err)
+	}
+	if len(opened) != 2 || opened[0] != PageCursor || opened[1] != PageDeepSeek {
+		t.Errorf("点击卡片应依次打开 cursor / deepseek 页，实际 %v", opened)
+	}
+}
+
+// TestPopoverUsageModeAndPlan 新计划按美元额度显示：环里显示百分比，并标注套餐与精确重置时刻。
+func TestPopoverUsageModeAndPlan(t *testing.T) {
+	st := fullState()
+	st.Cursor.Usage = model.CursorUsage{
+		Mode: model.CursorModeUsage, Account: "acct", Used: 1672, Limit: 2000, Membership: "pro", LimitType: "team",
+		CycleStart: time.Date(2026, 9, 16, 8, 0, 0, 0, time.Local), CycleEndAt: time.Date(2026, 10, 16, 10, 24, 0, 0, time.Local),
+	}
+	a := newTestApp(st)
+	tt := ui.NewTester(a.popoverView, PopoverWidth, PopoverHeight)
+	for _, want := range []string{"84%", "剩余 $3.28", "Pro · 团队额度", "10/16 10:24 重置 · 还剩 1天19时"} {
+		if !tt.HasText(want) {
+			t.Errorf("缺少 %q；实际: %q", want, tt.Texts())
+		}
+	}
+}

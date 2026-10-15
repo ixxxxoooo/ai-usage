@@ -19,7 +19,7 @@ import (
 )
 
 // SchemaVersion 是当前数据库结构版本。
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // Store 封装数据库访问；所有方法并发安全（底层单连接串行）。
 //
@@ -110,8 +110,51 @@ func (s *Store) migrate() error {
 			}
 		}
 	}
+	if v < 2 {
+		// v2：明细按账号隔离。旧明细无法判断属于哪个账号（切换账号时会混在一起），
+		// 而它只是服务端数据的本地缓存，直接清掉，之后按当前账号重新同步即可。
+		has, err := s.hasColumn("cursor_events", "account")
+		if err != nil {
+			return err
+		}
+		if !has {
+			if _, err := s.db.Exec(`ALTER TABLE cursor_events ADD COLUMN account TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("升级数据库失败：%w", err)
+			}
+		}
+		for _, st := range []string{
+			`DELETE FROM cursor_events WHERE account = ''`,
+			`CREATE INDEX IF NOT EXISTS idx_cursor_events_acc_ts ON cursor_events(account, ts)`,
+		} {
+			if _, err := s.db.Exec(st); err != nil {
+				return fmt.Errorf("升级数据库失败：%w", err)
+			}
+		}
+	}
 	_, err = s.db.Exec(`INSERT INTO kv(key,value) VALUES('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, fmt.Sprint(SchemaVersion))
 	return err
+}
+
+// hasColumn 判断表里是否已有某列。
+//
+// 参数 table：表名；col：列名。
+// 返回值：是否存在、错误。
+func (s *Store) hasColumn(table, col string) (bool, error) {
+	rows, err := s.db.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return false, err
+		}
+		if n == col {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // ---- 键值与设置 ----
@@ -188,10 +231,17 @@ func (s *Store) UpsertCursorEvents(evs []model.CursorEvent) (int, error) {
 }
 
 // insertEvents 在事务内插入事件。
+//
+// 事件自带 Account；为空（例如旧版本导出的备份）时归到 kv 里记录的当前账号。
 func insertEvents(tx *sql.Tx, evs []model.CursorEvent) (int, error) {
+	fallback := ""
+	var raw string
+	if err := tx.QueryRow(`SELECT value FROM kv WHERE key='cursor_account'`).Scan(&raw); err == nil {
+		_ = json.Unmarshal([]byte(raw), &fallback)
+	}
 	st, err := tx.Prepare(`INSERT OR IGNORE INTO cursor_events
-		(key,ts,model,kind,requests,input_tokens,output_tokens,cache_write,cache_read,total_cents,charged_cents,is_token,conversation_id)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+		(key,ts,model,kind,requests,input_tokens,output_tokens,cache_write,cache_read,total_cents,charged_cents,is_token,conversation_id,account)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return 0, err
 	}
@@ -202,8 +252,12 @@ func insertEvents(tx *sql.Tx, evs []model.CursorEvent) (int, error) {
 		if e.IsTokenBased {
 			tok = 1
 		}
+		acc := e.Account
+		if acc == "" {
+			acc = fallback
+		}
 		r, err := st.Exec(e.Key, e.Time.UnixMilli(), e.Model, e.Kind, e.Requests, e.InputTokens, e.OutputTokens,
-			e.CacheWrite, e.CacheRead, e.TotalCents, e.ChargedCents, tok, e.ConversationID)
+			e.CacheWrite, e.CacheRead, e.TotalCents, e.ChargedCents, tok, e.ConversationID, acc)
 		if err != nil {
 			return n, err
 		}
@@ -218,6 +272,7 @@ func insertEvents(tx *sql.Tx, evs []model.CursorEvent) (int, error) {
 type EventQuery struct {
 	Since, Until time.Time // 零值表示不限
 	Model        string    // 为空表示不限
+	Account      string    // 为空表示不限账号（导出备份用）；界面始终指定当前账号
 	Limit        int       // <=0 表示不限
 }
 
@@ -226,8 +281,12 @@ type EventQuery struct {
 // 参数 q：查询条件。
 // 返回值：事件列表。
 func (s *Store) CursorEvents(q EventQuery) ([]model.CursorEvent, error) {
-	sqlStr := `SELECT key,ts,model,kind,requests,input_tokens,output_tokens,cache_write,cache_read,total_cents,charged_cents,is_token,conversation_id FROM cursor_events WHERE 1=1`
+	sqlStr := `SELECT key,ts,model,kind,requests,input_tokens,output_tokens,cache_write,cache_read,total_cents,charged_cents,is_token,conversation_id,account FROM cursor_events WHERE 1=1`
 	var args []any
+	if q.Account != "" {
+		sqlStr += ` AND account = ?`
+		args = append(args, q.Account)
+	}
 	if !q.Since.IsZero() {
 		sqlStr += ` AND ts >= ?`
 		args = append(args, q.Since.UnixMilli())
@@ -260,7 +319,7 @@ func scanEvents(rows *sql.Rows) ([]model.CursorEvent, error) {
 		var ts int64
 		var tok int
 		if err := rows.Scan(&e.Key, &ts, &e.Model, &e.Kind, &e.Requests, &e.InputTokens, &e.OutputTokens,
-			&e.CacheWrite, &e.CacheRead, &e.TotalCents, &e.ChargedCents, &tok, &e.ConversationID); err != nil {
+			&e.CacheWrite, &e.CacheRead, &e.TotalCents, &e.ChargedCents, &tok, &e.ConversationID, &e.Account); err != nil {
 			return nil, err
 		}
 		e.Time = time.UnixMilli(ts)
@@ -270,21 +329,23 @@ func scanEvents(rows *sql.Rows) ([]model.CursorEvent, error) {
 	return out, rows.Err()
 }
 
-// CursorEventCount 返回明细总条数。
+// CursorEventCount 返回某账号的明细总条数。
 //
+// 参数 account：账号；为空表示所有账号。
 // 返回值：条数。
-func (s *Store) CursorEventCount() (int, error) {
+func (s *Store) CursorEventCount(account string) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM cursor_events`).Scan(&n)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM cursor_events WHERE (?1 = '' OR account = ?1)`, account).Scan(&n)
 	return n, err
 }
 
-// LatestCursorEventTime 返回最新一条明细的时间（没有则为零值）。
+// LatestCursorEventTime 返回某账号最新一条明细的时间（没有则为零值）。
 //
+// 参数 account：账号；为空表示所有账号。
 // 返回值：时间。
-func (s *Store) LatestCursorEventTime() (time.Time, error) {
+func (s *Store) LatestCursorEventTime(account string) (time.Time, error) {
 	var ts sql.NullInt64
-	if err := s.db.QueryRow(`SELECT MAX(ts) FROM cursor_events`).Scan(&ts); err != nil {
+	if err := s.db.QueryRow(`SELECT MAX(ts) FROM cursor_events WHERE (?1 = '' OR account = ?1)`, account).Scan(&ts); err != nil {
 		return time.Time{}, err
 	}
 	if !ts.Valid {
@@ -293,11 +354,12 @@ func (s *Store) LatestCursorEventTime() (time.Time, error) {
 	return time.UnixMilli(ts.Int64), nil
 }
 
-// CursorModels 返回出现过的模型名（字典序）。
+// CursorModels 返回某账号出现过的模型名（字典序）。
 //
+// 参数 account：账号；为空表示所有账号。
 // 返回值：模型列表。
-func (s *Store) CursorModels() ([]string, error) {
-	rows, err := s.db.Query(`SELECT DISTINCT model FROM cursor_events ORDER BY model`)
+func (s *Store) CursorModels(account string) ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT model FROM cursor_events WHERE (?1 = '' OR account = ?1) ORDER BY model`, account)
 	if err != nil {
 		return nil, err
 	}

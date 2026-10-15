@@ -190,7 +190,7 @@ func TestImportTwiceNoDuplicates(t *testing.T) {
 			t.Errorf("第 %d 次不应新增: %+v", i+1, res.ImportResult)
 		}
 	}
-	if n, _ := dst.CursorEventCount(); n != 50 {
+	if n, _ := dst.CursorEventCount(""); n != 50 {
 		t.Errorf("明细数 %d，应为 50", n)
 	}
 	if rows, _ := dst.DeepSeekDaily("", ""); len(rows) != 10 {
@@ -238,7 +238,7 @@ func TestMergeOverlap(t *testing.T) {
 	if res.EventsAdded != 40 || res.EventsSkipped != 60 {
 		t.Errorf("%+v", res.ImportResult)
 	}
-	if n, _ := dst.CursorEventCount(); n != 101 {
+	if n, _ := dst.CursorEventCount(""); n != 101 {
 		t.Errorf("并集应为 101，实际 %d", n)
 	}
 }
@@ -266,7 +266,7 @@ func TestReplaceKeepsSafetyBackup(t *testing.T) {
 	if res.SafetyBackup == "" {
 		t.Fatal("覆盖导入应生成安全备份")
 	}
-	if n, _ := dst.CursorEventCount(); n != 30 {
+	if n, _ := dst.CursorEventCount(""); n != 30 {
 		t.Errorf("覆盖后应只有 30 条，实际 %d", n)
 	}
 	// 用安全备份可以把旧数据完整恢复。
@@ -394,7 +394,7 @@ func TestLegacyFile(t *testing.T) {
 	if _, err := Import(dst, b, ImportOptions{ApplySettings: true}); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := dst.CursorEventCount(); n != 1 {
+	if n, _ := dst.CursorEventCount(""); n != 1 {
 		t.Error("旧版明细应导入")
 	}
 	if !strings.Contains(pv.Summary(), "旧版备份") {
@@ -605,7 +605,7 @@ func TestLargeRoundTrip(t *testing.T) {
 	if _, err := Import(dst, b, ImportOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := dst.CursorEventCount(); n != 20000 {
+	if n, _ := dst.CursorEventCount(""); n != 20000 {
 		t.Errorf("%d", n)
 	}
 	if d := time.Since(start); d > 30*time.Second {

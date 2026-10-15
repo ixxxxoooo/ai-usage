@@ -14,7 +14,7 @@ import (
 )
 
 // AppVersion 是应用版本号，显示在「关于」并写入备份文件。
-const AppVersion = "1.0.1"
+const AppVersion = "1.1.0"
 
 // hooks 是界面对外部世界的交互入口：文件对话框与异步执行。
 // 默认走真实实现，测试时可整体替换，避免弹窗与 goroutine。
@@ -26,6 +26,7 @@ type hooks struct {
 	async    func(a *App, work func() func())         // 后台执行 work，返回的回调在主线程执行
 	getLogin func() bool                              // 读取开机自启状态
 	setLogin func(on bool) error                      // 设置开机自启
+	openPage func(page string)                        // 打开大面板并跳到指定页面（测试里替换为记录）
 }
 
 // h 返回带默认值的 hooks。
@@ -357,4 +358,15 @@ func (a *App) loadSecretFlags() {
 	a.ui.hasCookie, a.ui.maskCookie = read(secret.KeyCursorCookie)
 	a.ui.hasKey, a.ui.maskKey = read(secret.KeyDeepSeekKey)
 	a.ui.hasToken, a.ui.maskToken = read(secret.KeyDeepSeekToken)
+}
+
+// openPage 打开大面板并跳到指定页面（浮窗里点卡片用）。
+//
+// 参数 page：PageOverview / PageCursor / PageDeepSeek / PageSettings。
+func (a *App) openPage(page string) {
+	if a.hk.openPage != nil {
+		a.hk.openPage(page)
+		return
+	}
+	a.OpenPanel(page)
 }

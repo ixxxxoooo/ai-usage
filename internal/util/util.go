@@ -174,3 +174,24 @@ func Clamp(v, lo, hi float64) float64 {
 	}
 	return v
 }
+
+// FormatCountdown 把剩余时长格式化成精确到分钟的倒计时：
+// 1 天以上 "1天3时"，1 小时以上 "12时5分"，不足 1 小时 "42分"，不足 1 分钟 "不到1分"。
+//
+// 参数 d：剩余时长；小于等于 0 返回 "0分"。
+// 返回值：倒计时文本。
+func FormatCountdown(d time.Duration) string {
+	if d <= 0 {
+		return "0分"
+	}
+	mins := int(d / time.Minute)
+	switch {
+	case mins >= 24*60:
+		return fmt.Sprintf("%d天%d时", mins/(24*60), mins%(24*60)/60)
+	case mins >= 60:
+		return fmt.Sprintf("%d时%d分", mins/60, mins%60)
+	case mins >= 1:
+		return fmt.Sprintf("%d分", mins)
+	}
+	return "不到1分"
+}

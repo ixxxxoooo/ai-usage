@@ -167,3 +167,76 @@ func stat(c *ui.Context, title, value string, col ui.Color) {
 func hint(c *ui.Context, text string) ui.Element {
 	return ui.Text(c, text).FontSize(11).TextColor(c.Theme().TextMuted)
 }
+
+// 官网页面地址：账单页的「在官网查看」按钮会用系统默认浏览器打开。
+const (
+	CursorUsageURL   = "https://cursor.com/dashboard?tab=usage"
+	DeepSeekUsageURL = "https://platform.deepseek.com/usage"
+)
+
+// linkButton 画一个「在官网查看」按钮：点击后用系统默认浏览器打开 url。
+//
+// 参数 c：上下文；key：稳定标识；label：按钮文案；url：要打开的地址。
+func linkButton(c *ui.Context, key, label, url string) {
+	if ui.Button(c.Key(key), label).Description("在浏览器打开 " + url).Clicked() {
+		c.OpenURL(url)
+	}
+}
+
+// clickableCard 让卡片可点击：鼠标变手型、悬停时加深底色，点击时执行 onClick。
+//
+// 参数 cd：已创建好内容的卡片；onClick：点击回调。
+func clickableCard(c *ui.Context, cd ui.Element, onClick func()) {
+	t := c.Theme()
+	cd.Cursor(ui.CursorPointer)
+	if cd.Hovered() {
+		cd.Border(1, t.Accent.Alpha(0.55))
+	}
+	cd.OnClick(onClick)
+}
+
+// maxSelectHeight 是下拉列表的最大高度，超出时出现滚动条。
+const maxSelectHeight = 260
+
+// scrollSelect 画一个选项很多时也不会撑出窗口的下拉框：列表最高 maxSelectHeight，超出可滚动。
+//
+// 外观与 ui.Select 一致，键盘上下键与回车照常可用。
+//
+// 参数 c：上下文（调用方已 c.Key）；selected：当前选中；options：全部选项；width：触发按钮宽度；label：无障碍名称。
+// 返回值：触发按钮元素。
+func scrollSelect(c *ui.Context, selected *string, options []string, width float32, label string) ui.Element {
+	t := c.Theme()
+	sel := ui.SelectBase(c, selected)
+	trig := sel.Trigger.Width(width).Label(label)
+	trig.Padding(6, 10).Gap(6).Radius(t.Radius).Background(t.Surface).Border(1, t.Border).TextColor(t.Text).Justify(ui.SpaceBetween)
+	if trig.Hovered() {
+		trig.Background(t.SurfaceHover)
+	}
+	trig.Children(func() {
+		ui.Text(c, *selected).SingleLine()
+		ui.Box(c).Size(10, 10).Shrink(0).Draw(func(p *ui.Painter, r ui.Rect) {
+			var path ui.Path
+			path.MoveTo(r.X+r.W*0.1, r.Y+r.H*0.3).LineTo(r.X+r.W*0.5, r.Y+r.H*0.7).LineTo(r.X+r.W*0.9, r.Y+r.H*0.3)
+			p.StrokePath(&path, 1.5, t.TextMuted)
+		})
+	})
+	sel.Popup(func(panel ui.Element) {
+		panel.Margin(4, 0, 0, 0).Padding(4).Radius(t.Radius+2).Background(t.Background).Border(1, t.Border).MinWidth(width)
+		panel.Shadow(0, 6, 20, 0, ui.RGBA(0, 0, 0, 0.18))
+		ui.Scroll(c.Key("select-scroll")).MaxHeight(maxSelectHeight).Children(func() {
+			ui.Column(c).Children(func() {
+				for _, opt := range options {
+					item := sel.Item(opt).Padding(6, 10).Radius(t.Radius)
+					switch {
+					case item.Highlighted():
+						item.Background(t.Accent).TextColor(t.AccentText)
+					case opt == *selected:
+						item.Background(t.Surface)
+					}
+					item.Children(func() { ui.Text(c, opt).SingleLine() })
+				}
+			})
+		})
+	})
+	return trig
+}

@@ -103,3 +103,21 @@ func TestClampAndStartOfDay(t *testing.T) {
 		t.Errorf("StartOfDay: %v", d)
 	}
 }
+
+// TestFormatCountdown 倒计时精确到分钟，随距离远近切换单位。
+func TestFormatCountdown(t *testing.T) {
+	cases := map[time.Duration]string{
+		-time.Minute:                  "0分",
+		30 * time.Second:              "不到1分",
+		42 * time.Minute:              "42分",
+		12*time.Hour + 5*time.Minute:  "12时5分",
+		27*time.Hour + 59*time.Minute: "1天3时",
+		3*24*time.Hour + 23*time.Hour: "3天23时",
+		time.Hour:                     "1时0分",
+	}
+	for d, want := range cases {
+		if got := FormatCountdown(d); got != want {
+			t.Errorf("FormatCountdown(%v) = %q，期望 %q", d, got, want)
+		}
+	}
+}

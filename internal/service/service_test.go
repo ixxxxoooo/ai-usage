@@ -32,6 +32,7 @@ type cursorFake struct {
 	eventBody []map[string]any // 记录每次明细请求体
 	events    []string
 	usageHits int32
+	summary   string // 非空时 /api/usage-summary 返回它，且 /api/usage 不再给次数上限（模拟新计划）
 }
 
 // newCursorFake 创建假服务；默认返回 359/500。
@@ -50,7 +51,24 @@ func newCursorFake(t *testing.T) *cursorFake {
 			w.WriteHeader(st)
 			return
 		}
+		f.mu.Lock()
+		newPlan := f.summary != ""
+		f.mu.Unlock()
+		if newPlan {
+			fmt.Fprint(w, `{"gpt-4":{"numRequests":0,"maxRequestUsage":null},"startOfMonth":"2026-09-16T02:24:49.000Z"}`)
+			return
+		}
 		fmt.Fprintf(w, `{"gpt-4":{"numRequests":%d,"numRequestsTotal":%d,"maxRequestUsage":500},"startOfMonth":"2026-09-16T02:24:49.000Z"}`, used, used)
+	})
+	mux.HandleFunc("/api/usage-summary", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		sum := f.summary
+		f.mu.Unlock()
+		if sum == "" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, sum)
 	})
 	mux.HandleFunc("/api/auth/me", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `{"email":"me@x.com"}`) })
 	mux.HandleFunc("/api/dashboard/get-filtered-usage-events", func(w http.ResponseWriter, r *http.Request) {
@@ -508,7 +526,7 @@ func TestCursorThresholdNotifications(t *testing.T) {
 	h.svc.RefreshAll(context.Background()) // 92% => 90
 	found90 := false
 	for _, id := range h.noticeList() {
-		if strings.HasPrefix(id, "cursor:90:") {
+		if strings.Contains(id, ":90:") {
 			found90 = true
 		}
 	}
@@ -637,7 +655,7 @@ func TestNextWait(t *testing.T) {
 func TestTestConnections(t *testing.T) {
 	h := newHarness(t)
 	msg, err := h.svc.TestCursor(context.Background())
-	if err != nil || !strings.Contains(msg, "359 / 500") {
+	if err != nil || !strings.Contains(msg, "359 次 / 500 次") {
 		t.Errorf("%q %v", msg, err)
 	}
 	msg, err = h.svc.TestDeepSeek(context.Background())
@@ -798,5 +816,106 @@ func TestSaveTokenNormalizes(t *testing.T) {
 	}
 	if v, _ := h.secrets.Get(secret.KeyDeepSeekToken); v != long {
 		t.Errorf("被拒绝后不应覆盖原值: %q", v)
+	}
+}
+
+// newAccountService 创建一个可切换 Cursor 登录账号的服务（共用同一个数据库）。
+func (h *harness) newAccountService(t *testing.T, user *atomic.Value) *Service {
+	svc, err := New(Config{
+		Store: h.st, Secrets: h.secrets,
+		Cursor: &cursor.Client{BaseURL: h.cur.URL},
+		DS:     &deepseek.Client{APIBase: h.ds.URL, PlatformBase: h.ds.URL},
+		CursorLocalCreds: func() (cursor.Credentials, error) {
+			return cursor.Credentials{UserID: user.Load().(string), Token: "a.b.c"}, nil
+		},
+		ChromeTokens: func() ([]deepseek.ChromeToken, error) { return nil, nil },
+		Now:          func() time.Time { return fixedNow },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc
+}
+
+// TestAccountSwitchIsolatesEvents 切换 Cursor 账号后，用量与明细必须跟着切换，不能混在一起。
+func TestAccountSwitchIsolatesEvents(t *testing.T) {
+	h := newHarness(t)
+	var user atomic.Value
+	user.Store("user_A")
+	svc := h.newAccountService(t, &user)
+	ctx := context.Background()
+
+	svc.RefreshAll(ctx)
+	if c := svc.State().Cursor; c.Usage.Account != "user_A" || c.EventCount != 3 {
+		t.Fatalf("A 账号: account=%q events=%d", c.Usage.Account, c.EventCount)
+	}
+	// 换成 B 账号：服务端对 B 返回另外 2 条明细
+	h.cur.mu.Lock()
+	h.cur.events = h.cur.events[:0]
+	for i := 0; i < 2; i++ {
+		h.cur.events = append(h.cur.events, fmt.Sprintf(`{"timestamp":"%d","model":"gpt-5","kind":"K","requestsCosts":1}`, fixedNow.Add(-time.Duration(i+10)*time.Hour).UnixMilli()))
+	}
+	h.cur.mu.Unlock()
+	user.Store("user_B")
+	svc.RefreshAll(ctx)
+	c := svc.State().Cursor
+	if c.Usage.Account != "user_B" || c.EventCount != 2 {
+		t.Fatalf("B 账号: account=%q events=%d", c.Usage.Account, c.EventCount)
+	}
+	a, _ := h.st.CursorEvents(store.EventQuery{Account: "user_A"})
+	b, _ := h.st.CursorEvents(store.EventQuery{Account: "user_B"})
+	if len(a) != 3 || len(b) != 2 {
+		t.Errorf("按账号隔离: A=%d B=%d", len(a), len(b))
+	}
+	for _, e := range b {
+		if e.Model != "gpt-5" {
+			t.Errorf("B 里混入了 A 的明细: %+v", e)
+		}
+	}
+	if models, _ := h.st.CursorModels("user_B"); len(models) != 1 || models[0] != "gpt-5" {
+		t.Errorf("模型列表应只含当前账号: %v", models)
+	}
+	// 再换回 A：A 的历史仍在，不会重复拉取为 B 的数据
+	user.Store("user_A")
+	svc.RefreshAll(ctx)
+	if c := svc.State().Cursor; c.EventCount != 3 {
+		t.Errorf("切回 A: %d", c.EventCount)
+	}
+}
+
+// TestAccountSwitchClearsStaleUsage 切换账号后新账号取数失败时，不能把旧账号的用量显示在新账号下。
+func TestAccountSwitchClearsStaleUsage(t *testing.T) {
+	h := newHarness(t)
+	var user atomic.Value
+	user.Store("user_A")
+	svc := h.newAccountService(t, &user)
+	svc.RefreshAll(context.Background())
+	if !svc.State().Cursor.HasUsage {
+		t.Fatal("前置：A 应有用量")
+	}
+	user.Store("user_B")
+	h.cur.setStatus(500)
+	svc.RefreshAll(context.Background())
+	if c := svc.State().Cursor; c.HasUsage || c.EventCount != 0 {
+		t.Errorf("新账号失败时不应沿用旧账号数据: %+v", c)
+	}
+}
+
+// TestNewPlanUsageMode 新计划/团队没有次数上限时，按美元额度计，并能给出精确的重置时刻。
+func TestNewPlanUsageMode(t *testing.T) {
+	h := newHarness(t)
+	h.cur.mu.Lock()
+	h.cur.summary = `{"billingCycleStart":"2026-09-16T02:24:49.000Z","billingCycleEnd":"2026-10-16T02:24:49.000Z","membershipType":"pro","limitType":"team","isUnlimited":false,"individualUsage":{"plan":{"used":1672,"limit":2000},"onDemand":{"used":0}}}`
+	h.cur.mu.Unlock()
+	h.svc.RefreshAll(context.Background())
+	u := h.svc.State().Cursor.Usage
+	if !u.IsUsage() || u.Used != 1672 || u.Limit != 2000 || u.LimitType != "team" {
+		t.Fatalf("%+v", u)
+	}
+	if want := time.Date(2026, 10, 16, 2, 24, 49, 0, time.UTC); !u.CycleEnd().Equal(want) {
+		t.Errorf("重置时刻: %v", u.CycleEnd())
+	}
+	if msg, err := h.svc.TestCursor(context.Background()); err != nil || !strings.Contains(msg, "$16.72 / $20.00") {
+		t.Errorf("测试连接文案: %q %v", msg, err)
 	}
 }
