@@ -1,6 +1,6 @@
 // Package httpx 封装各数据源共用的 HTTP 细节：浏览器 UA、超时、响应体大小限制。
 //
-// @author ygw
+// @author ixxxxoooo
 package httpx
 
 import (

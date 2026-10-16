@@ -6,7 +6,7 @@
 //   - 导入先完整解析与校验，再在单个事务里写库（失败整体回滚）；覆盖导入前自动留一份安全备份。
 //   - 版本：当前为 SchemaVersion；缺少版本号的旧文件按 v0 迁移（补默认值）；更新版本的文件拒绝并提示升级。
 //
-// @author ygw
+// @author ixxxxoooo
 package transfer
 
 import (
@@ -68,7 +68,7 @@ type SnapshotRec struct {
 
 // Backup 是完整备份文件的结构。
 //
-// @author ygw
+// @author ixxxxoooo
 type Backup struct {
 	Format        string                     `json:"format"`
 	SchemaVersion int                        `json:"schemaVersion"`
@@ -177,7 +177,7 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 
 // Preview 是导入前给用户确认的摘要。
 //
-// @author ygw
+// @author ixxxxoooo
 type Preview struct {
 	Version        int       `json:"version"`
 	Legacy         bool      `json:"legacy"` // 旧版（无版本号）文件，已自动迁移
@@ -223,7 +223,7 @@ var dateRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 // finite 判断浮点数是否是有限值。
 func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
-// validEvent 判断明细是否合法，并补全缺失的去重键。
+// validEvent 判断明细是否合法，并（重新）计算去重键。
 func validEvent(e *model.CursorEvent) bool {
 	if e.Time.IsZero() || e.Time.Year() < 2000 || e.Time.After(time.Now().AddDate(1, 0, 0)) {
 		return false
@@ -234,10 +234,30 @@ func validEvent(e *model.CursorEvent) bool {
 	if e.InputTokens < 0 || e.OutputTokens < 0 || e.CacheRead < 0 || e.CacheWrite < 0 {
 		return false
 	}
-	if e.Key == "" {
-		e.Key = cursor.EventKey(*e)
-	}
+	// 去重键一律重算：旧版本备份里的键包含 Token，同一事件的多份快照键各不相同，必须换成新键后再合并
+	e.Key = cursor.EventKey(*e)
 	return true
+}
+
+// dedupeEvents 合并同一事件（账号+键相同）的多份快照，保留 Token 最多（最终状态）的一份，保持原有顺序。
+//
+// 参数 evs：已重算过去重键的事件。
+// 返回值：去重后的事件。
+func dedupeEvents(evs []model.CursorEvent) []model.CursorEvent {
+	idx := make(map[string]int, len(evs))
+	out := make([]model.CursorEvent, 0, len(evs))
+	for _, e := range evs {
+		k := e.Account + "|" + e.Key
+		if i, ok := idx[k]; ok {
+			if e.TotalTokens() > out[i].TotalTokens() {
+				out[i] = e
+			}
+			continue
+		}
+		idx[k] = len(out)
+		out = append(out, e)
+	}
+	return out
 }
 
 // validDaily 判断账单行是否合法。
@@ -317,7 +337,7 @@ func Parse(r io.Reader) (*Backup, Preview, error) {
 			pv.InvalidEvents++
 		}
 	}
-	b.CursorEvents = evs
+	b.CursorEvents = dedupeEvents(evs)
 	rows := make([]model.DeepSeekDaily, 0, len(b.DeepSeekDaily))
 	for _, d := range b.DeepSeekDaily {
 		if validDaily(d) {

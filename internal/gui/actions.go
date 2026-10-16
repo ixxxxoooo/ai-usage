@@ -14,12 +14,12 @@ import (
 )
 
 // AppVersion 是应用版本号，显示在「关于」并写入备份文件。
-const AppVersion = "1.1.0"
+const AppVersion = "1.2.0"
 
 // hooks 是界面对外部世界的交互入口：文件对话框与异步执行。
 // 默认走真实实现，测试时可整体替换，避免弹窗与 goroutine。
 //
-// @author ygw
+// @author ixxxxoooo
 type hooks struct {
 	saveFile func(title, name string) (string, error) // 保存对话框；取消返回空串
 	openFile func(title string) (string, error)       // 打开对话框；取消返回空串
@@ -288,39 +288,36 @@ func (a *App) wipeData() {
 
 // testConnection 后台测试某个服务的连接。
 //
-// 参数 which：secret 之外的服务名 "cursor" 或 "deepseek"。
+// 参数 which：服务名 "cursor"、"deepseek" 或 "antigravity"。
 func (a *App) testConnection(which string) {
-	if which == "cursor" {
-		if a.ui.testingC {
-			return
-		}
-		a.ui.testingC, a.ui.testCursor = true, "测试中…"
-	} else {
-		if a.ui.testingD {
-			return
-		}
-		a.ui.testingD, a.ui.testDS = true, "测试中…"
+	busy, result := &a.ui.testingD, &a.ui.testDS
+	switch which {
+	case "cursor":
+		busy, result = &a.ui.testingC, &a.ui.testCursor
+	case "antigravity":
+		busy, result = &a.ui.testingA, &a.ui.testAG
 	}
+	if *busy {
+		return
+	}
+	*busy, *result = true, "测试中…"
 	a.run(func() func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 		defer cancel()
 		var msg string
 		var err error
-		if which == "cursor" {
+		switch which {
+		case "cursor":
 			msg, err = a.svc.TestCursor(ctx)
-		} else {
+		case "antigravity":
+			msg, err = a.svc.TestAntigravity(ctx)
+		default:
 			msg, err = a.svc.TestDeepSeek(ctx)
 		}
 		if err != nil {
 			msg = "失败：" + err.Error()
 		}
-		return func() {
-			if which == "cursor" {
-				a.ui.testingC, a.ui.testCursor = false, msg
-			} else {
-				a.ui.testingD, a.ui.testDS = false, msg
-			}
-		}
+		return func() { *busy, *result = false, msg }
 	})
 }
 

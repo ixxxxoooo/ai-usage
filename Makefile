@@ -1,4 +1,4 @@
-# AI Usage 常用命令。作者：ygw
+# AI Usage 常用命令。作者：ixxxxoooo
 .PHONY: help test vet fmt build build-universal run live shots clean
 
 help: ## 显示帮助

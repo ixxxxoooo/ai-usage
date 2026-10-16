@@ -3,9 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,11 +17,19 @@ import (
 	"time"
 
 	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/antigravity"
 	"github.com/ixxxxoooo/ai-usage/internal/provider/cursor"
 	"github.com/ixxxxoooo/ai-usage/internal/provider/deepseek"
 	"github.com/ixxxxoooo/ai-usage/internal/secret"
 	"github.com/ixxxxoooo/ai-usage/internal/store"
 )
+
+// init 让测试默认认为本机没有运行 Antigravity，避免触碰开发机上真实运行的进程。
+func init() {
+	newAntigravityClient = func() *antigravity.Client {
+		return &antigravity.Client{Procs: func(context.Context) ([]antigravity.Process, error) { return nil, nil }}
+	}
+}
 
 // 固定“当前时间”：与真实数据一致的 2026-10-14。
 var fixedNow = time.Date(2026, 10, 14, 15, 0, 0, 0, time.Local)
@@ -851,6 +862,7 @@ func TestAccountSwitchIsolatesEvents(t *testing.T) {
 	}
 	// 换成 B 账号：服务端对 B 返回另外 2 条明细
 	h.cur.mu.Lock()
+	aEvents := append([]string(nil), h.cur.events...)
 	h.cur.events = h.cur.events[:0]
 	for i := 0; i < 2; i++ {
 		h.cur.events = append(h.cur.events, fmt.Sprintf(`{"timestamp":"%d","model":"gpt-5","kind":"K","requestsCosts":1}`, fixedNow.Add(-time.Duration(i+10)*time.Hour).UnixMilli()))
@@ -875,7 +887,10 @@ func TestAccountSwitchIsolatesEvents(t *testing.T) {
 	if models, _ := h.st.CursorModels("user_B"); len(models) != 1 || models[0] != "gpt-5" {
 		t.Errorf("模型列表应只含当前账号: %v", models)
 	}
-	// 再换回 A：A 的历史仍在，不会重复拉取为 B 的数据
+	// 再换回 A：A 的历史仍在，不会重复拉取为 B 的数据（服务端此时返回 A 的 3 条）
+	h.cur.mu.Lock()
+	h.cur.events = aEvents
+	h.cur.mu.Unlock()
 	user.Store("user_A")
 	svc.RefreshAll(ctx)
 	if c := svc.State().Cursor; c.EventCount != 3 {
@@ -917,5 +932,262 @@ func TestNewPlanUsageMode(t *testing.T) {
 	}
 	if msg, err := h.svc.TestCursor(context.Background()); err != nil || !strings.Contains(msg, "$16.72 / $20.00") {
 		t.Errorf("测试连接文案: %q %v", msg, err)
+	}
+}
+
+// setEvents 替换假服务端的明细（每项是一条事件 JSON）。
+func (f *cursorFake) setEvents(evs ...string) {
+	f.mu.Lock()
+	f.events = evs
+	f.mu.Unlock()
+}
+
+// progressEvent 构造一条「进行中」的事件：时间戳、会话固定，只有 Token 在变。
+func progressEvent(ts time.Time, conv string, cacheRead int) string {
+	return fmt.Sprintf(`{"timestamp":"%d","model":"claude-sonnet-5-5-high","kind":"USAGE_EVENT_KIND_INCLUDED_IN_PRO","requestsCosts":1,"conversationId":"%s","tokenUsage":{"inputTokens":10,"outputTokens":20,"cacheWriteTokens":30,"cacheReadTokens":%d,"totalCents":%d}}`,
+		ts.UnixMilli(), conv, cacheRead, cacheRead/1000)
+}
+
+// TestInProgressEventNotDuplicated 回归：进行中的事件（时间戳不变、Token 逐次增长）每次刷新只能更新同一行，不能累加出新行。
+func TestInProgressEventNotDuplicated(t *testing.T) {
+	h := newHarness(t)
+	svc := h.svc
+	ctx := context.Background()
+	ts := fixedNow.Add(-30 * time.Minute)
+	for i, cr := range []int{1000, 5000, 20000, 90000} {
+		h.cur.setEvents(progressEvent(ts, "conv-1", cr))
+		svc.RefreshAll(ctx)
+		if n := svc.State().Cursor.EventCount; n != 1 {
+			t.Fatalf("第 %d 次刷新后应只有 1 条明细，实际 %d", i+1, n)
+		}
+	}
+	got, _ := h.st.CursorEvents(store.EventQuery{})
+	if len(got) != 1 || got[0].CacheRead != 90000 {
+		t.Fatalf("应保留最新的 Token 值: %+v", got)
+	}
+}
+
+// TestSyncRemovesRemoteMissing 完整拉取后，本地在同一区间内多出来的旧记录（如历史重复）会被清掉；区间之外的不动。
+func TestSyncRemovesRemoteMissing(t *testing.T) {
+	h := newHarness(t)
+	svc := h.svc
+	ctx := context.Background()
+	ts := fixedNow.Add(-30 * time.Minute)
+	h.cur.setEvents(progressEvent(ts, "conv-1", 1000))
+	svc.RefreshAll(ctx)
+	// 本地混入一条本周期内的陈旧重复记录（模拟旧版本留下的快照），以及一条早于本周期起点的历史
+	recent := model.CursorEvent{Time: ts, Model: "claude-sonnet-5-5-high", Kind: "K", Requests: 1, ConversationID: "conv-1", InputTokens: 7, Account: "u"}
+	recent.Key = "legacy-dup"
+	old := model.CursorEvent{Time: fixedNow.AddDate(0, 0, -40), Model: "m", Kind: "K", Requests: 1, Account: "u"}
+	old.Key = "old-history"
+	acc := svc.State().Cursor.Usage.Account
+	recent.Account, old.Account = acc, acc
+	if _, err := h.st.UpsertCursorEvents([]model.CursorEvent{recent, old}); err != nil {
+		t.Fatal(err)
+	}
+	svc.RefreshAll(ctx)
+	got, _ := h.st.CursorEvents(store.EventQuery{Account: acc})
+	keys := map[string]bool{}
+	for _, e := range got {
+		keys[e.Key] = true
+	}
+	if keys["legacy-dup"] {
+		t.Errorf("区间内远端已不存在的记录应被清理: %+v", got)
+	}
+	if !keys["old-history"] {
+		t.Errorf("区间之外的历史不应被动: %+v", got)
+	}
+}
+
+// TestIncompleteFetchKeepsLocal 拉取不完整（接口总数大于实际拿到）时不能删除本地数据。
+func TestIncompleteFetchKeepsLocal(t *testing.T) {
+	if completeFetch(0, 5) || completeFetch(3, -1) {
+		t.Error("空结果或没有总数不应视为完整")
+	}
+	if !completeFetch(3, 3) || !completeFetch(996, 1000) {
+		t.Error("数量吻合应视为完整")
+	}
+	if completeFetch(50, 100) {
+		t.Error("只拿到一半不应视为完整")
+	}
+}
+
+// agFake 模拟本机 Antigravity 语言服务。
+type agFake struct {
+	*httptest.Server
+	mu   sync.Mutex
+	body string
+	hits int32
+	port int
+	on   bool // 是否「运行中」
+}
+
+// newAGFake 创建假服务；默认运行中，返回两个额度池。
+func newAGFake(t *testing.T) *agFake {
+	f := &agFake{on: true, body: agBody(0.72, 1)}
+	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&f.hits, 1)
+		if r.Header.Get("X-Codeium-Csrf-Token") != "tok" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		f.mu.Lock()
+		b := f.body
+		f.mu.Unlock()
+		fmt.Fprint(w, b)
+	}))
+	t.Cleanup(f.Close)
+	u, _ := url.Parse(f.URL)
+	_, p, _ := net.SplitHostPort(u.Host)
+	f.port, _ = strconv.Atoi(p)
+	return f
+}
+
+// agBody 构造响应：Gemini 组剩余 gem，Claude 组剩余 cl。
+func agBody(gem, cl float64) string {
+	return fmt.Sprintf(`{"userStatus":{"userTier":{"name":"Google AI Pro"},"cascadeModelConfigData":{"clientModelConfigs":[
+{"label":"Gemini 3.8 Flash (High)","modelId":"g-h","quotaInfo":{"remainingFraction":%g,"resetTime":"2026-10-14T09:00:00Z"}},
+{"label":"Claude Opus 4.6 (Thinking)","modelId":"c-o","quotaInfo":{"remainingFraction":%g,"resetTime":"2026-10-14T11:00:00Z"}}]}}}`, gem, cl)
+}
+
+// client 返回指向该假服务的客户端；on 为 false 时表示进程不存在。
+func (f *agFake) client() *antigravity.Client {
+	return &antigravity.Client{
+		Procs: func(context.Context) ([]antigravity.Process, error) {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if !f.on {
+				return nil, nil
+			}
+			return []antigravity.Process{{PID: 1, CSRF: "tok"}}, nil
+		},
+		Ports: func(context.Context, int) ([]int, error) { return []int{f.port}, nil },
+	}
+}
+
+// newAGService 创建使用假 Antigravity 的服务。
+func (h *harness) newAGService(t *testing.T, f *agFake) *Service {
+	svc, err := New(Config{
+		Store: h.st, Secrets: h.secrets, Antigravity: f.client(),
+		Cursor: &cursor.Client{BaseURL: h.cur.URL},
+		DS:     &deepseek.Client{APIBase: h.ds.URL, PlatformBase: h.ds.URL},
+		CursorLocalCreds: func() (cursor.Credentials, error) {
+			return cursor.Credentials{UserID: "user_T", Token: "a.b.c"}, nil
+		},
+		ChromeTokens: func() ([]deepseek.ChromeToken, error) { return h.chrome, nil },
+		Now:          func() time.Time { return fixedNow },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return svc
+}
+
+// TestAntigravityRefresh 刷新后能读到额度池，并落库；重启后立即可见。
+func TestAntigravityRefresh(t *testing.T) {
+	h := newHarness(t)
+	f := newAGFake(t)
+	svc := h.newAGService(t, f)
+	svc.RefreshAll(context.Background())
+	ag := svc.State().Antigravity
+	if ag.Status != StatusOK || !ag.HasQuota || ag.Quota.Plan != "Google AI Pro" || len(ag.Quota.Models) != 2 {
+		t.Fatalf("状态: %+v", ag)
+	}
+	if p, ok := ag.Quota.Tightest(); !ok || p.Remaining != 0.72 || p.Name != "Gemini" {
+		t.Errorf("最紧张的额度池: %+v", p)
+	}
+	// 重启：不刷新也能立刻看到上次的额度
+	svc2 := h.newAGService(t, f)
+	if a := svc2.State().Antigravity; !a.HasQuota || a.Quota.Plan != "Google AI Pro" {
+		t.Errorf("重启后应恢复上次额度: %+v", a)
+	}
+}
+
+// TestAntigravityNotRunningKeepsData Antigravity 没运行时标记「未运行」并保留旧数据；运行后恢复；失败后不退避拉长。
+func TestAntigravityNotRunningKeepsData(t *testing.T) {
+	h := newHarness(t)
+	f := newAGFake(t)
+	svc := h.newAGService(t, f)
+	ctx := context.Background()
+	svc.RefreshAll(ctx)
+	f.mu.Lock()
+	f.on = false
+	f.mu.Unlock()
+	for i := 0; i < 4; i++ {
+		svc.RefreshAll(ctx)
+	}
+	ag := svc.State().Antigravity
+	if ag.Status != StatusNotRunning || !ag.HasQuota || !ag.Stale() || ag.Message == "" {
+		t.Fatalf("未运行应保留旧数据并标记: %+v", ag)
+	}
+	if want := fixedNow.Add(time.Minute); !ag.NextTry.Equal(want) {
+		t.Errorf("未运行时不应指数退避，下次尝试应为 1 分钟后: %v", ag.NextTry.Sub(fixedNow))
+	}
+	f.mu.Lock()
+	f.on = true
+	f.body = agBody(0.5, 1)
+	f.mu.Unlock()
+	svc.RefreshAll(ctx)
+	ag = svc.State().Antigravity
+	if ag.Status != StatusOK || ag.Stale() {
+		t.Fatalf("恢复运行后应回到正常: %+v", ag)
+	}
+	if p, _ := ag.Quota.Tightest(); p.Remaining != 0.5 {
+		t.Errorf("应更新为最新额度: %+v", p)
+	}
+}
+
+// TestAntigravityDisabled 在设置里关闭后不发任何请求，打开后立即取一次。
+func TestAntigravityDisabled(t *testing.T) {
+	h := newHarness(t)
+	f := newAGFake(t)
+	svc := h.newAGService(t, f)
+	s := svc.Settings()
+	s.AntigravityOff = true
+	if err := svc.UpdateSettings(s); err != nil {
+		t.Fatal(err)
+	}
+	svc.RefreshAll(context.Background())
+	if n := atomic.LoadInt32(&f.hits); n != 0 {
+		t.Errorf("关闭后不应访问 Antigravity，实际 %d 次", n)
+	}
+	if st := svc.State().Antigravity; !st.Disabled || st.HasQuota {
+		t.Errorf("状态应为已关闭: %+v", st)
+	}
+	s.AntigravityOff = false
+	if err := svc.UpdateSettings(s); err != nil {
+		t.Fatal(err)
+	}
+	svc.RefreshAll(context.Background())
+	if st := svc.State().Antigravity; st.Disabled || !st.HasQuota || st.Status != StatusOK {
+		t.Errorf("重新打开后应取到额度: %+v", st)
+	}
+}
+
+// TestAntigravityDoesNotAffectOthers Antigravity 失败不影响 Cursor / DeepSeek 刷新。
+func TestAntigravityDoesNotAffectOthers(t *testing.T) {
+	h := newHarness(t)
+	f := newAGFake(t)
+	f.on = false
+	svc := h.newAGService(t, f)
+	svc.RefreshAll(context.Background())
+	st := svc.State()
+	if st.Cursor.Status != StatusOK || st.DeepSeek.Status != StatusOK || st.Antigravity.Status != StatusNotRunning {
+		t.Errorf("各数据源应独立: cursor=%s deepseek=%s ag=%s", st.Cursor.Status, st.DeepSeek.Status, st.Antigravity.Status)
+	}
+}
+
+// TestTestAntigravity 设置页「测试连接」的文案。
+func TestTestAntigravity(t *testing.T) {
+	h := newHarness(t)
+	f := newAGFake(t)
+	svc := h.newAGService(t, f)
+	msg, err := svc.TestAntigravity(context.Background())
+	if err != nil || !strings.Contains(msg, "Google AI Pro") || !strings.Contains(msg, "2 个模型") {
+		t.Errorf("%q %v", msg, err)
+	}
+	f.on = false
+	if _, err := svc.TestAntigravity(context.Background()); !errors.Is(err, antigravity.ErrNotRunning) {
+		t.Errorf("没运行应返回 ErrNotRunning: %v", err)
 	}
 }

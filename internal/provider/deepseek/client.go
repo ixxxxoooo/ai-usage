@@ -1,6 +1,6 @@
 // Package deepseek 实现 DeepSeek 数据源：API Key 余额、平台账单（需网页登录 token）、浏览器 token 读取。
 //
-// @author ygw
+// @author ixxxxoooo
 package deepseek
 
 import (
@@ -39,7 +39,7 @@ const (
 
 // Client 调用 DeepSeek 接口。
 //
-// @author ygw
+// @author ixxxxoooo
 type Client struct {
 	APIBase      string       // 官方 API 地址（测试可替换）
 	PlatformBase string       // 平台网站地址（测试可替换）

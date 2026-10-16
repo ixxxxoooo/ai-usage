@@ -6,13 +6,14 @@ import (
 	"github.com/ixxxxoooo/ai-usage/internal/util"
 )
 
-// overviewPage 概览页：两张大卡片 + 近 14 天趋势图。
+// overviewPage 概览页：Cursor / DeepSeek 大卡片、Antigravity 额度卡片 + 近 14 天趋势图。
 func (a *App) overviewPage(c *ui.Context, st service.State) {
 	t := c.Theme()
 	now := a.now()
 	data := a.Data()
 	cv := BuildCursorVM(st.Cursor, now)
 	dv := BuildDeepSeekVM(st.DeepSeek, st.Settings, now)
+	av := BuildAntigravityVM(st.Antigravity, now)
 	pageTitle(c, "概览", RefreshedText(st, now), func() {
 		if ui.Button(c.Key("ov-refresh"), "立即刷新").Disabled(st.Refreshing).Clicked() {
 			a.RefreshNow()
@@ -23,6 +24,9 @@ func (a *App) overviewPage(c *ui.Context, st service.State) {
 			a.bigCursorCard(c, cv, st)
 			a.bigDeepSeekCard(c, dv, st)
 		})
+		if !av.Disabled {
+			ui.Row(c).Gap(14).AlignItems(ui.Stretch).Children(func() { a.bigAntigravityCard(c, av) })
+		}
 		ui.Row(c).Gap(14).AlignItems(ui.Stretch).Children(func() {
 			card(c).Grow(1).Basis(0).Children(func() {
 				ui.Text(c, "Cursor · 近 14 天请求次数").Bold().FontSize(13)

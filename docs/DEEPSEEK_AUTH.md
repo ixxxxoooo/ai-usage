@@ -1,6 +1,6 @@
 # DeepSeek 登录是怎么获取的
 
-> 作者：ygw
+> 作者：ixxxxoooo
 
 账单、今日 Token、每日明细来自 `platform.deepseek.com` 的网页接口，需要网页登录凭据。
 

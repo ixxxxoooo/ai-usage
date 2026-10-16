@@ -3,14 +3,16 @@
 // Package live 是用真实账号数据做的只读联调测试，只在用户本机用 `go test -tags live ./internal/live` 运行。
 // 所有请求都是只读接口；任何凭据都不会被打印（只打印脱敏后的摘要）。
 //
-// @author ygw
+// @author ixxxxoooo
 package live
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/ixxxxoooo/ai-usage/internal/provider/antigravity"
 	"github.com/ixxxxoooo/ai-usage/internal/provider/cursor"
 	"github.com/ixxxxoooo/ai-usage/internal/provider/deepseek"
 	"github.com/ixxxxoooo/ai-usage/internal/util"
@@ -102,5 +104,51 @@ func TestLiveCursorFullHistory(t *testing.T) {
 	t.Logf("全部历史明细 %d 条", len(evs))
 	if len(evs) == 0 {
 		t.Error("全部历史查询返回 0 条（startDate=0 可能不被接口接受）")
+	}
+}
+
+// TestLiveCursorNoDuplicates 回归：拉取全部明细后，同一事件不能出现多份；本地库的条数与金额要和远端一致。
+func TestLiveCursorNoDuplicates(t *testing.T) {
+	cred, err := cursor.ReadLocalCredentials("")
+	if err != nil {
+		t.Skipf("本机没有可用的 Cursor 登录: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	total := -1
+	evs, err := cursor.NewClient().FetchEvents(ctx, cred, time.Time{}, time.Time{}, func(_, tot int) { total = tot })
+	if err != nil {
+		t.Fatalf("拉取明细失败: %v", err)
+	}
+	seen := map[string]bool{}
+	for _, e := range evs {
+		if seen[e.Key] {
+			t.Fatalf("出现重复事件: %s %s", e.Time, e.Model)
+		}
+		seen[e.Key] = true
+	}
+	t.Logf("远端总数 %d，拉到 %d 条", total, len(evs))
+	if total >= 0 && len(evs) < total-total/200 {
+		t.Errorf("拉到的条数 %d 明显少于远端总数 %d", len(evs), total)
+	}
+}
+
+// TestLiveAntigravity 读取本机正在运行的 Antigravity 的额度（只读，本机回环接口）。
+func TestLiveAntigravity(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	q, err := antigravity.NewClient().FetchQuota(ctx)
+	if errors.Is(err, antigravity.ErrNotRunning) {
+		t.Skip("本机没有运行 Antigravity")
+	}
+	if err != nil {
+		t.Fatalf("读取额度失败: %v", err)
+	}
+	t.Logf("套餐 %s，%d 个模型", q.Plan, len(q.Models))
+	for _, m := range q.Models {
+		t.Logf("  %-34s 可用=%v 剩余=%.1f%% 重置=%s", m.Label, !m.Disabled && m.HasQuota, m.Remaining*100, m.ResetAt.Local().Format("01-02 15:04"))
+	}
+	if len(q.Pools()) == 0 {
+		t.Error("应至少有一个额度池")
 	}
 }

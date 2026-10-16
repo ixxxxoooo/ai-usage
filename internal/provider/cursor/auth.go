@@ -1,6 +1,6 @@
 // Package cursor 实现 Cursor 用量数据源：本机凭据读取与 dashboard 接口调用。
 //
-// @author ygw
+// @author ixxxxoooo
 package cursor
 
 import (
@@ -34,7 +34,7 @@ var (
 
 // Credentials 是调用 Cursor dashboard 接口所需的凭据。
 //
-// @author ygw
+// @author ixxxxoooo
 type Credentials struct {
 	UserID string // WorkOS 用户 ID（user_xxx）
 	Token  string // 会话 JWT（敏感）

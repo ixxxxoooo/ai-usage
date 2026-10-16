@@ -182,3 +182,21 @@ func TestCursorUsageCycleEnd(t *testing.T) {
 		t.Errorf("距离重置 %v", d)
 	}
 }
+
+// TestEventKeyIgnoresTokens 回归：去重键不能包含 Token，否则进行中的事件每次刷新都会被当成新事件。
+func TestEventKeyIgnoresTokens(t *testing.T) {
+	ts := time.UnixMilli(1792161769217)
+	a := CursorEvent{Time: ts, Model: "claude", ConversationID: "c", Kind: "K", Requests: 1, InputTokens: 190, CacheRead: 15167459, TotalCents: 356}
+	b := a
+	b.InputTokens, b.OutputTokens, b.CacheRead, b.TotalCents = 346, 641732, 27955176, 623
+	if EventKey(a) != EventKey(b) {
+		t.Error("同一事件 Token 增长后键应保持不变")
+	}
+	c := a
+	c.Time = ts.Add(time.Millisecond)
+	d := a
+	d.ConversationID = "other"
+	if EventKey(a) == EventKey(c) || EventKey(a) == EventKey(d) {
+		t.Error("时间或会话不同应得到不同的键")
+	}
+}

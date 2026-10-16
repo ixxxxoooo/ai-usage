@@ -1,6 +1,6 @@
 // Package service 负责调度刷新、状态机、阈值提醒，并把结果持久化。
 //
-// @author ygw
+// @author ixxxxoooo
 package service
 
 import (
@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/antigravity"
 	"github.com/ixxxxoooo/ai-usage/internal/provider/cursor"
 	"github.com/ixxxxoooo/ai-usage/internal/provider/deepseek"
 )
@@ -28,11 +29,12 @@ const (
 	StatusOffline      Status = "offline"      // 网络不通
 	StatusRateLimited  Status = "ratelimited"  // 被限流/拦截
 	StatusError        Status = "error"        // 其他错误
+	StatusNotRunning   Status = "notrunning"   // 本机应用没有运行（Antigravity）
 )
 
 // ProviderState 是数据源通用的状态信息。
 //
-// @author ygw
+// @author ixxxxoooo
 type ProviderState struct {
 	Status    Status    // 当前状态
 	Message   string    // 面向用户的中文说明（失败时有值）
@@ -73,12 +75,21 @@ type DeepSeekState struct {
 	BillErr    string                // 账单同步失败原因（不影响余额显示）
 }
 
+// AntigravityState 是 Antigravity（反重力）在界面上展示所需的全部状态。
+type AntigravityState struct {
+	ProviderState
+	Quota    model.AntigravityQuota
+	HasQuota bool
+	Disabled bool // 用户在设置里关闭了 Antigravity 额度查询
+}
+
 // State 是提供给 UI 的整体快照（值拷贝，可安全读取）。
 type State struct {
-	Cursor     CursorState
-	DeepSeek   DeepSeekState
-	Settings   model.Settings
-	Refreshing bool
+	Cursor      CursorState
+	DeepSeek    DeepSeekState
+	Antigravity AntigravityState
+	Settings    model.Settings
+	Refreshing  bool
 }
 
 // classify 把底层错误归类为状态与中文说明。
@@ -89,6 +100,10 @@ func classify(err error) (Status, string) {
 	switch {
 	case err == nil:
 		return StatusOK, ""
+	case errors.Is(err, antigravity.ErrNotRunning):
+		return StatusNotRunning, err.Error()
+	case errors.Is(err, antigravity.ErrNotLoggedIn):
+		return StatusNoCreds, err.Error()
 	case errors.Is(err, cursor.ErrNoCredentials), errors.Is(err, deepseek.ErrNoCredentials):
 		return StatusNoCreds, err.Error()
 	case errors.Is(err, cursor.ErrUnauthorized), errors.Is(err, deepseek.ErrUnauthorized):
@@ -126,6 +141,8 @@ func (s Status) StatusText() string {
 		return "离线"
 	case StatusRateLimited:
 		return "被限流"
+	case StatusNotRunning:
+		return "未运行"
 	}
 	return "出错"
 }

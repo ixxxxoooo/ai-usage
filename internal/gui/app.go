@@ -16,25 +16,29 @@ import (
 
 // 浮窗与面板的尺寸（DIP）。
 const (
-	PopoverWidth  = 316
-	PopoverHeight = 332
-	PanelWidth    = 1020
-	PanelHeight   = 680
+	PopoverWidth = 316
+	// PopoverHeight 是只有 Cursor 与 DeepSeek 两张卡片时的浮窗高度；
+	// 开启 Antigravity 额度查询时再加上 PopoverAntigravityExtra（见 popoverHeight）。
+	PopoverHeight           = 332
+	PopoverAntigravityExtra = 130
+	PanelWidth              = 1020
+	PanelHeight             = 680
 )
 
 // 面板页面标识。
 const (
-	PageOverview = "overview"
-	PageCursor   = "cursor"
-	PageDeepSeek = "deepseek"
-	PageSettings = "settings"
+	PageOverview    = "overview"
+	PageCursor      = "cursor"
+	PageDeepSeek    = "deepseek"
+	PageAntigravity = "antigravity"
+	PageSettings    = "settings"
 )
 
 // App 是界面层的总控：托盘、浮窗、大面板，以及它们共享的状态。
 //
 // 视图只在主线程读取 App 的界面状态；跨线程的数据（Data）整体替换并加锁读取。
 //
-// @author ygw
+// @author ixxxxoooo
 type App struct {
 	svc     *service.Service
 	now     func() time.Time
@@ -62,6 +66,14 @@ type App struct {
 // 返回值：*App。
 func New() *App {
 	return &App{now: time.Now, reloadCh: make(chan struct{}, 1), ui: newUIState()}
+}
+
+// popoverHeight 返回浮窗内容高度：关闭 Antigravity 查询时不留空位。
+func (a *App) popoverHeight() int {
+	if a.state().Settings.AntigravityOff {
+		return PopoverHeight
+	}
+	return PopoverHeight + PopoverAntigravityExtra
 }
 
 // state 返回当前整体状态。
@@ -189,9 +201,7 @@ func (a *App) updateTray() {
 func (a *App) Start() error {
 	mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
 	mygo.App.OnWindowAllClosed(func() {}) // 浮窗/面板都关闭后继续常驻
-	mygo.App.SetMenu(mygo.NewMenu([]*mygo.MenuItem{
-		{Role: mygo.RoleAppMenu}, {Role: mygo.RoleEditMenu}, {Role: mygo.RoleWindowMenu},
-	}))
+	mygo.App.SetMenu(appMenu())
 	var err error
 	a.tray, err = mygo.NewTray(mygo.TrayOptions{Icon: assets.Tray(), IconIsTemplate: true, ToolTip: "AI Usage"})
 	if err != nil {
@@ -217,6 +227,21 @@ func (a *App) Start() error {
 	})
 	a.updateTray()
 	return nil
+}
+
+// appMenu 构建应用菜单。
+//
+// macOS 的 ⌘W 由菜单项提供：File 菜单里的「关闭窗口」绑定 performClose:，
+// 传给当前主窗口。菜单栏应用默认没有菜单，漏掉 File 菜单就等于 ⌘W 没人处理。
+//
+// 返回值：应用菜单。
+func appMenu() *mygo.Menu {
+	return mygo.NewMenu([]*mygo.MenuItem{
+		{Role: mygo.RoleAppMenu},
+		{Role: mygo.RoleFileMenu}, // 关闭窗口（⌘W）
+		{Role: mygo.RoleEditMenu},
+		{Role: mygo.RoleWindowMenu},
+	})
 }
 
 // showTrayMenu 在右键时弹出菜单；菜单只在这次弹出期间设置，这样左键仍然用来开关浮窗。
@@ -255,7 +280,7 @@ func (a *App) TogglePopover() {
 		Placement: mygo.PlacementBottom,
 		Gap:       4,
 		Width:     PopoverWidth,
-		Height:    PopoverHeight,
+		Height:    a.popoverHeight(),
 		Focusable: true,
 		Shadow:    true,
 		Popover:   true,
@@ -280,7 +305,7 @@ func (a *App) ClosePopover() {
 
 // OpenPanel 打开（或激活）大面板并切到指定页面。
 //
-// 参数 page：PageOverview / PageCursor / PageDeepSeek / PageSettings。
+// 参数 page：PageOverview / PageCursor / PageDeepSeek / PageAntigravity / PageSettings。
 func (a *App) OpenPanel(page string) {
 	a.ClosePopover()
 	if page != "" {

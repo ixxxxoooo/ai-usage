@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/antigravity"
 	"github.com/ixxxxoooo/ai-usage/internal/secret"
 	"github.com/ixxxxoooo/ai-usage/internal/service"
 	"github.com/ixxxxoooo/ai-usage/internal/store"
@@ -28,10 +30,12 @@ type panelEnv struct {
 // seedEvents 生成覆盖多天、多模型的 Cursor 明细。
 func seedEvents() []model.CursorEvent {
 	mk := func(i int, at time.Time, m string, req float64, tokens int64, cents float64) model.CursorEvent {
-		return model.CursorEvent{
-			Key: fmt.Sprintf("k%d", i), Time: at, Model: m, Kind: "USAGE_EVENT_KIND_INCLUDED_IN_PRO",
+		e := model.CursorEvent{
+			Time: at, Model: m, Kind: "USAGE_EVENT_KIND_INCLUDED_IN_PRO", ConversationID: fmt.Sprintf("conv%d", i),
 			Requests: req, InputTokens: tokens, OutputTokens: tokens / 10, TotalCents: cents, Account: "acct",
 		}
+		e.Key = model.EventKey(e) // 与真实数据一致：导入会按同样规则重算键
+		return e
 	}
 	return []model.CursorEvent{
 		mk(1, testNow.Add(-5*time.Hour), "claude-4.5-sonnet", 1, 20000, 12),
@@ -69,7 +73,9 @@ func newPanelEnv(t *testing.T) *panelEnv {
 		t.Fatal(err)
 	}
 	e := &panelEnv{st: st, secrets: secret.NewMemory(), dir: dir}
-	svc, err := service.New(service.Config{Store: st, Secrets: e.secrets, Now: func() time.Time { return testNow }})
+	svc, err := service.New(service.Config{Store: st, Secrets: e.secrets, Now: func() time.Time { return testNow },
+		// 测试里认为本机没有运行 Antigravity，避免触碰开发机上真实运行的进程
+		Antigravity: &antigravity.Client{Procs: func(context.Context) ([]antigravity.Process, error) { return nil, nil }}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,6 +124,72 @@ func TestPanelOverview(t *testing.T) {
 	}
 }
 
+// TestPanelOverviewShowsAntigravity 概览页展示 Antigravity 额度卡片。
+func TestPanelOverviewShowsAntigravity(t *testing.T) {
+	e := newPanelEnv(t)
+	tt := e.view(PageOverview)
+	for _, want := range []string{"Antigravity", "Google AI Pro", "Gemini", "剩余 72%", "Claude / GPT-OSS", "额度充足", "查看额度详情"} {
+		if !hasPart(tt, want) {
+			t.Errorf("概览缺少 %q；实际: %q", want, tt.Texts())
+		}
+	}
+	if err := tt.Click("查看额度详情"); err != nil {
+		t.Fatal(err)
+	}
+	if e.a.ui.page != PageAntigravity {
+		t.Errorf("应跳到 Antigravity 页: %s", e.a.ui.page)
+	}
+}
+
+// TestPanelAntigravityPage 额度页：按额度池展示，并列出全部模型（不可用的标明）。
+func TestPanelAntigravityPage(t *testing.T) {
+	e := newPanelEnv(t)
+	tt := e.view(PageAntigravity)
+	for _, want := range []string{"Antigravity 额度", "Google AI Pro", "Gemini", "剩余 72%", "28%", "已用", "全部模型",
+		"Claude Opus 4.6 (Thinking)", "GPT-OSS 120B (Medium)", "Gemini 3.8 Flash (High)", "Gemini 4 Argon", "不可用", "还剩 2时45分"} {
+		if !hasPart(tt, want) {
+			t.Errorf("额度页缺少 %q；实际: %q", want, tt.Texts())
+		}
+	}
+	// 侧边栏可进入
+	e.a.ui.page = PageOverview
+	tt = e.view(PageOverview)
+	if err := tt.Click("Antigravity 额度"); err != nil {
+		t.Fatal(err)
+	}
+	if e.a.ui.page != PageAntigravity {
+		t.Errorf("侧边栏应能进入额度页: %s", e.a.ui.page)
+	}
+}
+
+// TestPanelAntigravityEmptyStates 额度页在没运行、已关闭时的提示。
+func TestPanelAntigravityEmptyStates(t *testing.T) {
+	e := newPanelEnv(t)
+	base := e.a.stateFn
+	e.a.stateFn = func() service.State {
+		s := base()
+		s.Antigravity = service.AntigravityState{ProviderState: service.ProviderState{Status: service.StatusNotRunning, Message: "未检测到正在运行的 Antigravity，请先打开它"}}
+		return s
+	}
+	tt := e.view(PageAntigravity)
+	if !hasPart(tt, "未检测到正在运行的 Antigravity，请先打开它") {
+		t.Errorf("没运行应说明原因: %q", tt.Texts())
+	}
+	e.a.stateFn = func() service.State {
+		s := base()
+		s.Settings.AntigravityOff, s.Antigravity.Disabled = true, true
+		return s
+	}
+	tt = e.view(PageAntigravity)
+	if !hasPart(tt, "已在设置中关闭") {
+		t.Errorf("关闭后应提示: %q", tt.Texts())
+	}
+	tt = e.view(PageOverview)
+	if hasPart(tt, "查看额度详情") {
+		t.Error("关闭后概览不应显示 Antigravity 卡片")
+	}
+}
+
 // hasPart 是测试辅助：界面上任一文本包含 s 即为真。
 func hasPart(tt *ui.Tester, s string) bool {
 	for _, x := range tt.Texts() {
@@ -152,10 +224,10 @@ func TestPanelNavigation(t *testing.T) {
 	}
 }
 
-// TestPanelDarkAndScale 深色与 2 倍缩放下四个页面都能构建。
+// TestPanelDarkAndScale 深色与 2 倍缩放下各页面都能构建。
 func TestPanelDarkAndScale(t *testing.T) {
 	e := newPanelEnv(t)
-	for _, p := range []string{PageOverview, PageCursor, PageDeepSeek, PageSettings} {
+	for _, p := range []string{PageOverview, PageCursor, PageDeepSeek, PageAntigravity, PageSettings} {
 		tt := e.view(p)
 		tt.SetDark(true)
 		tt.SetScale(2)

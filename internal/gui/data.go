@@ -12,7 +12,7 @@ const maxEvents = 50000
 
 // Data 是界面用的明细数据快照；整体替换、只读，因此可以安全跨 goroutine 读取。
 //
-// @author ygw
+// @author ixxxxoooo
 type Data struct {
 	Events   []model.CursorEvent     // Cursor 明细，时间倒序
 	Models   []string                // Cursor 出现过的模型

@@ -37,6 +37,8 @@ func (a *App) panelView(c *ui.Context) {
 				a.cursorPage(c, st)
 			case PageDeepSeek:
 				a.deepseekPage(c, st)
+			case PageAntigravity:
+				a.antigravityPage(c, st)
 			case PageSettings:
 				a.settingsPage(c, st)
 			default:
@@ -64,6 +66,9 @@ func (a *App) sidebar(c *ui.Context, st service.State, top float32) {
 		ui.SidebarItem(c, PageOverview, iconOverview, "概览")
 		ui.SidebarItem(c, PageCursor, iconList, "Cursor 明细")
 		ui.SidebarItem(c, PageDeepSeek, iconWallet, "DeepSeek 账单")
+		if !st.Settings.AntigravityOff {
+			ui.SidebarItem(c, PageAntigravity, iconGauge, "Antigravity 额度")
+		}
 		ui.SidebarItem(c, PageSettings, iconSettings, "设置")
 	}).Grow(1).Changed() {
 		a.ui.page = sel
@@ -75,6 +80,9 @@ func (a *App) sidebar(c *ui.Context, st service.State, top float32) {
 	ui.Column(c).Gap(6).Padding(8).Children(func() {
 		statusLine(c, "Cursor", BuildCursorVM(st.Cursor, now).StatusText, StatusTone(st.Cursor.Status, st.Cursor.Stale()))
 		statusLine(c, "DeepSeek", BuildDeepSeekVM(st.DeepSeek, st.Settings, now).StatusText, StatusTone(st.DeepSeek.Status, st.DeepSeek.Stale()))
+		if !st.Settings.AntigravityOff {
+			statusLine(c, "Antigravity", BuildAntigravityVM(st.Antigravity, now).StatusText, StatusTone(st.Antigravity.Status, st.Antigravity.Stale()))
+		}
 		ui.Row(c).Gap(4).AlignItems(ui.Center).Children(func() {
 			hint(c, RefreshedText(st, now)).SingleLine().Grow(1)
 			if iconButton(c, "side-refresh", iconRefresh, "立即刷新", st.Refreshing) {

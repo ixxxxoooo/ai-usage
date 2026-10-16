@@ -19,7 +19,7 @@ var (
 
 // deepseekView 是按范围筛选好的 DeepSeek 账单视图数据（带缓存）。
 //
-// @author ygw
+// @author ixxxxoooo
 type deepseekView struct {
 	Rows     []model.DeepSeekDaily // 已筛选并按表格排序
 	Days     []model.DeepSeekDayStat

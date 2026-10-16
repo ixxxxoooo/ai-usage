@@ -16,7 +16,7 @@ import (
 
 // SelfTestReport 是运行期自检的输出（JSON），用于 E2E 脚本断言真实窗口位置。
 //
-// @author ygw
+// @author ixxxxoooo
 type SelfTestReport struct {
 	Mode      string           `json:"mode"`
 	OK        bool             `json:"ok"`

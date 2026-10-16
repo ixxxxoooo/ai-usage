@@ -1,11 +1,14 @@
 // Package model 定义 AI Usage 的领域模型与纯计算逻辑（无 IO，便于单元测试）。
 //
-// @author ygw
+// @author ixxxxoooo
 package model
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -19,7 +22,7 @@ const (
 
 // CursorUsage 是 Cursor 当前周期的用量快照，兼容老计划（按次数）与新计划/团队（按美元额度）。
 //
-// @author ygw
+// @author ixxxxoooo
 type CursorUsage struct {
 	Mode       string    `json:"mode,omitempty"`       // 计费口径，空值按老计划处理
 	Used       int       `json:"used"`                 // 已用：次数（requests）或美分（usage）
@@ -170,9 +173,9 @@ func (u CursorUsage) WillExhaustBeforeReset(now time.Time) bool {
 
 // CursorEvent 是 Cursor 一次请求的明细记录。
 //
-// @author ygw
+// @author ixxxxoooo
 type CursorEvent struct {
-	Key            string    `json:"key"`  // 去重键（时间+模型+会话+用量的摘要）
+	Key            string    `json:"key"`  // 去重键（时间+模型+会话+类型的摘要；不含 Token，进行中的事件 Token 会增长）
 	Time           time.Time `json:"time"` // 请求时间
 	Model          string    `json:"model"`
 	Kind           string    `json:"kind"`     // 原始类型，如 USAGE_EVENT_KIND_INCLUDED_IN_PRO
@@ -186,6 +189,20 @@ type CursorEvent struct {
 	IsTokenBased   bool      `json:"isTokenBased"`
 	ConversationID string    `json:"conversationId,omitempty"`
 	Account        string    `json:"account,omitempty"` // 所属账号（WorkOS 用户 ID）；旧备份没有该字段
+}
+
+// EventKey 计算事件的稳定去重键。
+//
+// 接口没有事件 ID，用「时间(毫秒)+模型+会话+类型」代替。注意不能把 Token 数放进键里：
+// Cursor 一次 Agent 运行里的事件在运行过程中 Token 会持续增长（时间戳不变），
+// 若 Token 参与计算，每次刷新都会被当成新事件，造成重复累计。
+//
+// 参数 e：事件。
+// 返回值：40 位十六进制摘要。
+func EventKey(e CursorEvent) string {
+	h := sha1.New()
+	fmt.Fprintf(h, "%d|%s|%s|%s", e.Time.UnixMilli(), e.Model, e.ConversationID, e.Kind)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // KindLabel 把原始类型转成易读中文。
@@ -299,7 +316,7 @@ func AggregateCursorByModel(evs []CursorEvent) []CursorModelStat {
 
 // DeepSeekBalance 是 DeepSeek 账户余额快照。
 //
-// @author ygw
+// @author ixxxxoooo
 type DeepSeekBalance struct {
 	Currency   string    `json:"currency"`
 	Total      float64   `json:"total"`      // 总可用余额
@@ -314,7 +331,7 @@ type DeepSeekBalance struct {
 
 // DeepSeekDaily 是 DeepSeek 一天一个模型的用量与费用（账单明细的最小单位）。
 //
-// @author ygw
+// @author ixxxxoooo
 type DeepSeekDaily struct {
 	Date      string  `json:"date"` // YYYY-MM-DD
 	Model     string  `json:"model"`
@@ -393,9 +410,113 @@ func DeepSeekMonthCost(rows []DeepSeekDaily, month string) float64 {
 	return c
 }
 
+// AntigravityModel 是 Antigravity 里一个模型的额度状态。
+//
+// @author ixxxxoooo
+type AntigravityModel struct {
+	Label     string    `json:"label"`     // 展示名，如 "Claude Opus 4.6 (Thinking)"
+	ID        string    `json:"id"`        // 模型标识
+	Disabled  bool      `json:"disabled"`  // 当前套餐不可用
+	HasQuota  bool      `json:"hasQuota"`  // 是否有额度信息
+	Remaining float64   `json:"remaining"` // 剩余比例 0~1
+	ResetAt   time.Time `json:"resetAt"`   // 额度重置时刻（零值未知）
+}
+
+// Used 返回已用比例 0~1（没有额度信息时为 0）。
+//
+// 返回值：已用比例。
+func (m AntigravityModel) Used() float64 {
+	if !m.HasQuota {
+		return 0
+	}
+	return 1 - m.Remaining
+}
+
+// AntigravityQuota 是 Antigravity（反重力）的额度快照。
+//
+// @author ixxxxoooo
+type AntigravityQuota struct {
+	Plan      string             `json:"plan"` // 套餐，如 "Google AI Pro"
+	Models    []AntigravityModel `json:"models"`
+	FetchedAt time.Time          `json:"fetchedAt"`
+}
+
+// AntigravityPool 是共用同一份额度的一组模型（剩余比例与重置时间相同的模型，如 Gemini Flash 的 High/Medium/Low）。
+//
+// @author ixxxxoooo
+type AntigravityPool struct {
+	Name      string    // 组名：各模型厂商名去重后用 " / " 连接，如 "Claude / GPT-OSS"
+	Labels    []string  // 组内模型的完整展示名
+	Remaining float64   // 剩余比例
+	ResetAt   time.Time // 重置时刻
+}
+
+// Used 返回已用比例 0~1。
+//
+// 返回值：已用比例。
+func (p AntigravityPool) Used() float64 { return 1 - p.Remaining }
+
+// Pools 把有额度信息且可用的模型按（剩余比例、重置时间）归并成额度池，按剩余比例升序（最紧张的在前）。
+//
+// 返回值：额度池列表；没有可用额度返回 nil。
+func (q AntigravityQuota) Pools() []AntigravityPool {
+	type key struct {
+		rem   int64 // 万分位，避免浮点比较误差
+		reset int64 // 分钟，容忍同一组里秒级的差异
+	}
+	idx := map[key]int{}
+	var pools []AntigravityPool
+	for _, m := range q.Models {
+		if m.Disabled || !m.HasQuota {
+			continue
+		}
+		k := key{int64(m.Remaining*10000 + 0.5), m.ResetAt.Unix() / 60}
+		i, ok := idx[k]
+		if !ok {
+			i = len(pools)
+			idx[k] = i
+			pools = append(pools, AntigravityPool{Remaining: m.Remaining, ResetAt: m.ResetAt})
+		}
+		pools[i].Labels = append(pools[i].Labels, m.Label)
+	}
+	for i := range pools {
+		var fams []string
+		seen := map[string]bool{}
+		for _, l := range pools[i].Labels {
+			f := antigravityFamily(l)
+			if !seen[f] {
+				seen[f] = true
+				fams = append(fams, f)
+			}
+		}
+		pools[i].Name = strings.Join(fams, " / ")
+	}
+	sort.SliceStable(pools, func(i, j int) bool { return pools[i].Remaining < pools[j].Remaining })
+	return pools
+}
+
+// antigravityFamily 从模型展示名里取厂商/系列名（第一个单词）：Claude Opus 4.6 → Claude，Gemini 3.8 Flash → Gemini。
+func antigravityFamily(label string) string {
+	if f := strings.Fields(label); len(f) > 0 {
+		return f[0]
+	}
+	return label
+}
+
+// Tightest 返回剩余比例最低的额度池。
+//
+// 返回值：额度池与是否存在。
+func (q AntigravityQuota) Tightest() (AntigravityPool, bool) {
+	ps := q.Pools()
+	if len(ps) == 0 {
+		return AntigravityPool{}, false
+	}
+	return ps[0], true
+}
+
 // Settings 是用户可调的应用设置（会随备份导出；凭据不在其中）。
 //
-// @author ygw
+// @author ixxxxoooo
 type Settings struct {
 	RefreshMinutes      int     `json:"refreshMinutes"`      // 自动刷新间隔（分钟）
 	TrayDisplay         string  `json:"trayDisplay"`         // icon / cursor / deepseek / both
@@ -405,6 +526,7 @@ type Settings struct {
 	NotifyCursorPercent []int   `json:"notifyCursorPercent"` // Cursor 提醒阈值（百分比）
 	NotifyDeepSeekBelow float64 `json:"notifyDeepseekBelow"` // DeepSeek 余额低于该值提醒（0 关闭）
 	HistoryDays         int     `json:"historyDays"`         // DeepSeek 账单拉取月数相关的回溯天数
+	AntigravityOff      bool    `json:"antigravityOff"`      // 关闭 Antigravity 额度查询（默认开启；用「关闭」而非「开启」是为了让旧备份/旧设置默认保持开启）
 }
 
 // 托盘显示模式常量。

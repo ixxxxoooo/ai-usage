@@ -1,6 +1,6 @@
 // Package util 提供项目通用的小工具：空值判断、脱敏、时间与数字格式化。
 //
-// @author ygw
+// @author ixxxxoooo
 package util
 
 import (

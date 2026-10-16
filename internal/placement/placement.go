@@ -4,7 +4,7 @@
 // 既用于表驱动单元测试，也用于运行期自检（--selftest）去比对真实浮窗位置。
 // 坐标系与 MyGo 一致：DIP，原点在主屏左上角，Y 向下增长，可为负（副屏在主屏左/上方）。
 //
-// @author ygw
+// @author ixxxxoooo
 package placement
 
 // Rect 是屏幕坐标系下的矩形。

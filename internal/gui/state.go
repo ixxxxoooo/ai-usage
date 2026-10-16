@@ -11,7 +11,7 @@ const allModels = "全部模型"
 
 // uiState 保存界面本身的状态（当前页、筛选、表格状态、设置草稿等），只在主线程读写。
 //
-// @author ygw
+// @author ixxxxoooo
 type uiState struct {
 	page string
 
@@ -47,6 +47,7 @@ type uiState struct {
 	notifyPct   map[int]bool
 	dsBelow     float64
 	loginItem   bool
+	agOn        bool // 查询 Antigravity 额度（设置里是 AntigravityOff 的反面）
 
 	cookieInput string
 	keyInput    string
@@ -58,8 +59,8 @@ type uiState struct {
 	maskKey     string
 	maskToken   string
 
-	testCursor, testDS string // 连接测试结果文案
-	testingC, testingD bool
+	testCursor, testDS, testAG   string // 连接测试结果文案
+	testingC, testingD, testingA bool
 
 	// ---- 数据管理 ----
 	exportCreds   bool

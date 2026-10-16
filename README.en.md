@@ -28,6 +28,7 @@ Cursor's legacy **500-request plan** and DeepSeek's balance both live behind web
 - **Menu bar**: choose what the tray shows (icon only / Cursor `359/500` / DeepSeek balance / both); a compact popover on click.
 - **Cursor**: used / remaining / reset date / daily average / projected exhaustion date; per-request table with filtering, sorting and charts.
 - **DeepSeek**: balance (top-up + granted), today's tokens and cost, this month, lifetime spend; daily and per-model bills.
+- **Antigravity**: per-model remaining quota and reset time read from the locally running Antigravity app (no credentials needed; can be switched off in Settings). See [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md).
 - **Refresh**: every **1 minute** by default (1–60 min), refreshes on wake, keeps and labels stale data when offline, backs off on failure and honors `Retry-After`.
 - **Alerts**: system notifications at 50/70/80/90/100 % of the Cursor quota and when DeepSeek balance gets low.
 - **Data**: local SQLite; **backup export/import** (merge or replace, preview before import, automatic safety backup) and CSV export.
@@ -60,7 +61,7 @@ Not affiliated with Cursor (Anysphere) or DeepSeek. It uses the same unofficial 
 
 ## License
 
-[MIT](LICENSE) © 2026 ygw
+[MIT](LICENSE) © 2026 ixxxxoooo
 
 ### Cursor accounts that are not "500 requests"
 

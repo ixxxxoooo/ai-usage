@@ -4,7 +4,7 @@
 //
 //	AIUSAGE_DATA_DIR  指定数据目录（测试/E2E 用；设置后凭据改存该目录下的文件而不是钥匙串）
 //
-// @author ygw
+// @author ixxxxoooo
 package main
 
 import (

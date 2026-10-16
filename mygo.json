@@ -1,8 +1,8 @@
 {
   "name": "AI Usage",
-  "identifier": "com.ygw.aiusage",
-  "version": "1.1.0",
-  "copyright": "© 2026 ygw",
+  "identifier": "com.ixxxxoooo.aiusage",
+  "version": "1.2.0",
+  "copyright": "© 2026 ixxxxoooo",
   "out": "build",
   "macos": {
     "minimumSystemVersion": "13.0",

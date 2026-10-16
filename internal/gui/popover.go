@@ -6,7 +6,7 @@ import (
 	"github.com/ixxxxoooo/ai-usage/internal/service"
 )
 
-// popoverView 构建托盘浮窗：Cursor 与 DeepSeek 两张卡片 + 顶部/底部操作栏。
+// popoverView 构建托盘浮窗：Cursor、DeepSeek、Antigravity 三张卡片 + 顶部/底部操作栏。
 //
 // 参数 c：上下文。
 func (a *App) popoverView(c *ui.Context) {
@@ -23,6 +23,9 @@ func (a *App) popoverView(c *ui.Context) {
 		a.cursorCard(c, BuildCursorVM(st.Cursor, now), st)
 		dv := BuildDeepSeekVM(st.DeepSeek, st.Settings, now)
 		a.deepseekCard(c, dv, st)
+		if av := BuildAntigravityVM(st.Antigravity, now); !av.Disabled {
+			a.antigravityCard(c, av)
+		}
 		ui.Spacer(c)
 		popoverNote(c, BuildCursorVM(st.Cursor, now), dv)
 		ui.Row(c).Gap(6).Children(func() {

@@ -3,8 +3,6 @@ package cursor
 import (
 	"bytes"
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,7 +21,7 @@ const DefaultBaseURL = "https://cursor.com"
 
 // Client 调用 Cursor dashboard 的只读接口。
 //
-// @author ygw
+// @author ixxxxoooo
 type Client struct {
 	BaseURL  string       // 默认 https://cursor.com，测试时指向假服务
 	HTTP     *http.Client // 为空则使用 30 秒超时的默认客户端
@@ -397,16 +395,11 @@ func toEvent(r rawEvent) model.CursorEvent {
 	return e
 }
 
-// EventKey 计算事件的稳定去重键（接口没有事件 ID，用关键字段摘要代替）。
+// EventKey 计算事件的稳定去重键（实现见 model.EventKey：不含 Token，避免进行中的事件被重复累计）。
 //
 // 参数 e：事件。
 // 返回值：40 位十六进制摘要。
-func EventKey(e model.CursorEvent) string {
-	h := sha1.New()
-	fmt.Fprintf(h, "%d|%s|%s|%s|%g|%d|%d|%d|%d", e.Time.UnixMilli(), e.Model, e.ConversationID, e.Kind,
-		e.Requests, e.InputTokens, e.OutputTokens, e.CacheWrite, e.CacheRead)
-	return hex.EncodeToString(h.Sum(nil))
-}
+func EventKey(e model.CursorEvent) string { return model.EventKey(e) }
 
 // FetchEvents 分页拉取 [since, until] 内的全部明细，并按 Key 去重。
 //

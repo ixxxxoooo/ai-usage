@@ -208,7 +208,8 @@ func TestExportImportRoundTrip(t *testing.T) {
 func TestImportMergeAndReplace(t *testing.T) {
 	e := newPanelEnv(t)
 	path := e.exportTo(t, "base.json", false)
-	extra := model.CursorEvent{Key: "local-only", Time: testNow, Model: "local-model", Requests: 1, Account: "acct"}
+	extra := model.CursorEvent{Time: testNow, Model: "local-model", Requests: 1, Account: "acct"}
+	extra.Key = model.EventKey(extra)
 	if _, err := e.st.UpsertCursorEvents([]model.CursorEvent{extra}); err != nil {
 		t.Fatal(err)
 	}
@@ -498,5 +499,32 @@ func TestPersistAcrossRestart(t *testing.T) {
 	var u model.CursorUsage
 	if ok, _ := st2.GetJSON("cursor_usage", &u); !ok || u.Used != 359 {
 		t.Errorf("重启后最近用量 %+v", u)
+	}
+}
+
+// TestSettingsAntigravityToggle 设置里的开关立即写库；关闭后可再打开；测试连接给出结果。
+func TestSettingsAntigravityToggle(t *testing.T) {
+	e := newPanelEnv(t)
+	tt := e.view(PageSettings)
+	if !tt.HasText("Antigravity（反重力）") || !e.a.ui.agOn {
+		t.Fatalf("默认应开启: on=%v texts=%q", e.a.ui.agOn, tt.Texts())
+	}
+	e.a.ui.agOn = false
+	tt.Frame()
+	if got, _ := e.st.GetSettings(); !got.AntigravityOff {
+		t.Error("关闭应写入数据库")
+	}
+	if !e.a.svc.State().Antigravity.Disabled {
+		t.Error("服务状态应标记为已关闭")
+	}
+	e.a.ui.agOn = true
+	tt.Frame()
+	if got, _ := e.st.GetSettings(); got.AntigravityOff {
+		t.Error("重新打开应写入数据库")
+	}
+	// 测试连接：测试环境里没有运行 Antigravity
+	e.a.testConnection("antigravity")
+	if e.a.ui.testingA || !strings.Contains(e.a.ui.testAG, "失败：未检测到正在运行的 Antigravity") {
+		t.Errorf("测试连接结果: %q testing=%v", e.a.ui.testAG, e.a.ui.testingA)
 	}
 }

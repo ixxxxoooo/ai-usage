@@ -1,6 +1,6 @@
 // Package store 用 SQLite（纯 Go 驱动 modernc）持久化设置、明细、账单与快照。
 //
-// @author ygw
+// @author ixxxxoooo
 package store
 
 import (
@@ -19,11 +19,11 @@ import (
 )
 
 // SchemaVersion 是当前数据库结构版本。
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // Store 封装数据库访问；所有方法并发安全（底层单连接串行）。
 //
-// @author ygw
+// @author ixxxxoooo
 type Store struct {
 	db   *sql.DB
 	path string
@@ -131,8 +131,67 @@ func (s *Store) migrate() error {
 			}
 		}
 	}
+	if v < 3 {
+		// v3：去重键不再包含 Token。旧版本把进行中事件每次刷新的快照都存成了新行，需要合并重复并换成新键。
+		if err := s.dedupeCursorEvents(); err != nil {
+			return fmt.Errorf("升级数据库失败：%w", err)
+		}
+	}
 	_, err = s.db.Exec(`INSERT INTO kv(key,value) VALUES('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, fmt.Sprint(SchemaVersion))
 	return err
+}
+
+// dedupeCursorEvents 合并同一事件（账号+时间+模型+会话+类型相同）的多份快照，保留 Token 最多的那份（最终状态），并换成新的去重键。
+//
+// 返回值：错误。
+func (s *Store) dedupeCursorEvents() error {
+	rows, err := s.db.Query(`SELECT key,ts,model,kind,requests,input_tokens,output_tokens,cache_write,cache_read,total_cents,charged_cents,is_token,conversation_id,account FROM cursor_events`)
+	if err != nil {
+		return err
+	}
+	evs, err := scanEvents(rows)
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	best := map[string]model.CursorEvent{}
+	for _, e := range evs {
+		k := e.Account + "|" + model.EventKey(e)
+		if cur, ok := best[k]; !ok || e.TotalTokens() > cur.TotalTokens() {
+			best[k] = e
+		}
+	}
+	if len(best) == len(evs) {
+		// 没有重复也要换键，否则之后用新键抓到的事件会和旧行并存
+		changed := false
+		for _, e := range evs {
+			if e.Key != model.EventKey(e) {
+				changed = true
+				break
+			}
+		}
+		if !changed {
+			return nil
+		}
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM cursor_events`); err != nil {
+		tx.Rollback()
+		return err
+	}
+	out := make([]model.CursorEvent, 0, len(best))
+	for _, e := range best {
+		e.Key = model.EventKey(e)
+		out = append(out, e)
+	}
+	if _, err := insertEvents(tx, out, false); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 // hasColumn 判断表里是否已有某列。
@@ -213,7 +272,8 @@ func (s *Store) SaveSettings(st model.Settings) error {
 
 // ---- Cursor 明细 ----
 
-// UpsertCursorEvents 批量写入明细，按 Key 去重（已存在的忽略）。
+// UpsertCursorEvents 批量写入明细：新事件插入，已存在的事件用最新数据覆盖
+// （Cursor 里进行中的事件时间戳不变、Token 持续增长，需要刷新为最新值）。
 //
 // 参数 evs：事件列表。
 // 返回值：新插入的条数。
@@ -222,7 +282,7 @@ func (s *Store) UpsertCursorEvents(evs []model.CursorEvent) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	n, err := insertEvents(tx, evs)
+	n, err := insertEvents(tx, evs, true)
 	if err != nil {
 		tx.Rollback()
 		return 0, err
@@ -230,22 +290,91 @@ func (s *Store) UpsertCursorEvents(evs []model.CursorEvent) (int, error) {
 	return n, tx.Commit()
 }
 
-// insertEvents 在事务内插入事件。
+// SyncCursorEvents 把一次完整拉取的结果与本地对齐：写入/更新这批事件，并删除时间区间内
+// 本地有、但远端已不存在的事件（用于清理历史重复或被服务端修正的记录）。
+//
+// 删除范围是开区间 (since, until)，端点不动，避免与相邻区间的同步互相影响。
+//
+// 参数 account：账号；evs：这次拉到的全部事件；since/until：本次拉取的时间范围（零值表示不限）。
+// 返回值：新插入条数、被清理条数。
+func (s *Store) SyncCursorEvents(account string, evs []model.CursorEvent, since, until time.Time) (int, int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	for i := range evs {
+		evs[i].Account = account
+	}
+	added, err := insertEvents(tx, evs, true)
+	if err != nil {
+		tx.Rollback()
+		return 0, 0, err
+	}
+	keep := make(map[string]bool, len(evs))
+	for _, e := range evs {
+		keep[e.Key] = true
+	}
+	lo, hi := int64(-1), int64(1<<62)
+	if !since.IsZero() && since.UnixMilli() > 0 {
+		lo = since.UnixMilli()
+	}
+	if !until.IsZero() {
+		hi = until.UnixMilli()
+	}
+	rows, err := tx.Query(`SELECT key FROM cursor_events WHERE account = ? AND ts > ? AND ts < ?`, account, lo, hi)
+	if err != nil {
+		tx.Rollback()
+		return 0, 0, err
+	}
+	var stale []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			rows.Close()
+			tx.Rollback()
+			return 0, 0, err
+		}
+		if !keep[k] {
+			stale = append(stale, k)
+		}
+	}
+	rows.Close()
+	for _, k := range stale {
+		if _, err := tx.Exec(`DELETE FROM cursor_events WHERE key = ?`, k); err != nil {
+			tx.Rollback()
+			return 0, 0, err
+		}
+	}
+	return added, len(stale), tx.Commit()
+}
+
+// insertEvents 在事务内写入事件。
 //
 // 事件自带 Account；为空（例如旧版本导出的备份）时归到 kv 里记录的当前账号。
-func insertEvents(tx *sql.Tx, evs []model.CursorEvent) (int, error) {
+// update 为 true 时已存在的事件被覆盖为新值（同步用）；为 false 时保留已有（导入合并用）。
+// 返回新插入的条数（被覆盖的不算）。
+func insertEvents(tx *sql.Tx, evs []model.CursorEvent, update bool) (int, error) {
 	fallback := ""
 	var raw string
 	if err := tx.QueryRow(`SELECT value FROM kv WHERE key='cursor_account'`).Scan(&raw); err == nil {
 		_ = json.Unmarshal([]byte(raw), &fallback)
 	}
-	st, err := tx.Prepare(`INSERT OR IGNORE INTO cursor_events
-		(key,ts,model,kind,requests,input_tokens,output_tokens,cache_write,cache_read,total_cents,charged_cents,is_token,conversation_id,account)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+	const cols = `(key,ts,model,kind,requests,input_tokens,output_tokens,cache_write,cache_read,total_cents,charged_cents,is_token,conversation_id,account)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	verb := `INSERT OR IGNORE INTO cursor_events `
+	if update {
+		verb = `INSERT OR REPLACE INTO cursor_events `
+	}
+	st, err := tx.Prepare(verb + cols)
 	if err != nil {
 		return 0, err
 	}
 	defer st.Close()
+	exists, err := tx.Prepare(`SELECT 1 FROM cursor_events WHERE key = ?`)
+	if err != nil {
+		return 0, err
+	}
+	defer exists.Close()
 	n := 0
 	for _, e := range evs {
 		tok := 0
@@ -256,12 +385,19 @@ func insertEvents(tx *sql.Tx, evs []model.CursorEvent) (int, error) {
 		if acc == "" {
 			acc = fallback
 		}
+		isNew := true
+		if update {
+			var one int
+			if exists.QueryRow(e.Key).Scan(&one) == nil {
+				isNew = false
+			}
+		}
 		r, err := st.Exec(e.Key, e.Time.UnixMilli(), e.Model, e.Kind, e.Requests, e.InputTokens, e.OutputTokens,
 			e.CacheWrite, e.CacheRead, e.TotalCents, e.ChargedCents, tok, e.ConversationID, acc)
 		if err != nil {
 			return n, err
 		}
-		if c, _ := r.RowsAffected(); c > 0 {
+		if c, _ := r.RowsAffected(); c > 0 && isNew {
 			n++
 		}
 	}
@@ -626,7 +762,7 @@ func (s *Store) ImportDataset(ds Dataset, replace bool) (ImportResult, error) {
 			}
 		}
 	}
-	n, err := insertEvents(tx, ds.CursorEvents)
+	n, err := insertEvents(tx, ds.CursorEvents, false)
 	if err != nil {
 		return fail(err)
 	}

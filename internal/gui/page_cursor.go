@@ -17,7 +17,7 @@ var cursorRanges = []string{"今天", "近 7 天", "本周期", "全部"}
 
 // cursorView 是按筛选条件算好的 Cursor 明细视图数据（带缓存）。
 //
-// @author ygw
+// @author ixxxxoooo
 type cursorView struct {
 	Rows    []model.CursorEvent // 已筛选并按表格排序
 	Days    []model.CursorDayStat

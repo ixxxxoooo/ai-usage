@@ -2,7 +2,7 @@
 //
 // 用法：go run ./cmd/genicon
 //
-// @author ygw
+// @author ixxxxoooo
 package main
 
 import (

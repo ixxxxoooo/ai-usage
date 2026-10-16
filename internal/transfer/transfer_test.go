@@ -278,7 +278,7 @@ func TestReplaceKeepsSafetyBackup(t *testing.T) {
 	if _, err := Import(restored, rb, ImportOptions{Replace: true, ApplySettings: true}); err != nil {
 		t.Fatal(err)
 	}
-	if got := snapshotOf(t, restored); !strings.Contains(got, "old-0") || strings.Count(got, "E|") != 5 {
+	if got := snapshotOf(t, restored); !strings.Contains(got, "|conv-0") || strings.Count(got, "E|") != 5 {
 		t.Errorf("安全备份无法恢复旧数据:\n%s\n旧数据:\n%s", got, oldSnap)
 	}
 }
@@ -685,5 +685,43 @@ func TestCSV(t *testing.T) {
 func TestErrNewerVersionMessage(t *testing.T) {
 	if !strings.Contains((ErrNewerVersion{Version: 9}).Error(), "v9") {
 		t.Error("应包含版本号")
+	}
+}
+
+// TestImportMergesLegacySnapshots 旧版本备份里同一事件有多份 Token 不同的快照（键各不相同）：导入时合并为一条，保留 Token 最多的。
+func TestImportMergesLegacySnapshots(t *testing.T) {
+	ts := base.Add(time.Hour)
+	mk := func(key string, cacheRead int64) model.CursorEvent {
+		return model.CursorEvent{Key: key, Time: ts, Model: "claude", Kind: "K", Requests: 1, ConversationID: "c1", CacheRead: cacheRead, TotalCents: float64(cacheRead) / 100}
+	}
+	other := model.CursorEvent{Time: ts.Add(time.Minute), Model: "claude", Kind: "K", Requests: 1, ConversationID: "c2"}
+	b := &Backup{Format: Format, SchemaVersion: SchemaVersion, CursorEvents: []model.CursorEvent{mk("legacy-a", 100), mk("legacy-b", 900), mk("legacy-c", 500), other}}
+	data, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "legacy.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rb, pv, err := ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pv.Events != 2 {
+		t.Errorf("预览应显示合并后的 2 条，实际 %d", pv.Events)
+	}
+	dst := newStore(t)
+	if _, err := Import(dst, rb, ImportOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := dst.CursorEvents(store.EventQuery{})
+	if len(got) != 2 {
+		t.Fatalf("应合并为 2 条: %d", len(got))
+	}
+	for _, e := range got {
+		if e.ConversationID == "c1" && e.CacheRead != 900 {
+			t.Errorf("应保留 Token 最多的快照: %+v", e)
+		}
 	}
 }

@@ -413,3 +413,102 @@ func TestEventsScopedByAccount(t *testing.T) {
 		t.Errorf("无账号事件应归当前账号 A: %d", len(got))
 	}
 }
+
+// TestSyncCursorEventsReconciles 完整拉取后与远端对齐：更新已有、清掉区间内多余的、区间外与端点不动、其他账号不动。
+func TestSyncCursorEventsReconciles(t *testing.T) {
+	s, _ := openTemp(t)
+	mk := func(key string, h int, acc string, cache int64) model.CursorEvent {
+		e := ev(0, "m")
+		e.Key, e.Time, e.Account, e.CacheRead = key, t0.Add(time.Duration(h)*time.Hour), acc, cache
+		return e
+	}
+	seed := []model.CursorEvent{
+		mk("old", -100, "A", 1), mk("edge-lo", -10, "A", 1), mk("stale", -5, "A", 1), mk("live", -3, "A", 10),
+		mk("edge-hi", 10, "A", 1), mk("other-acc", -5, "B", 1),
+	}
+	if _, err := s.UpsertCursorEvents(seed); err != nil {
+		t.Fatal(err)
+	}
+	fetched := []model.CursorEvent{mk("live", -3, "", 999), mk("new", -4, "", 5)}
+	added, removed, err := s.SyncCursorEvents("A", fetched, t0.Add(-10*time.Hour), t0.Add(10*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added != 1 || removed != 1 {
+		t.Errorf("应新增 1、清理 1：added=%d removed=%d", added, removed)
+	}
+	got, _ := s.CursorEvents(EventQuery{})
+	keys := map[string]model.CursorEvent{}
+	for _, e := range got {
+		keys[e.Key] = e
+	}
+	if _, ok := keys["stale"]; ok {
+		t.Error("区间内远端已不存在的记录应被清理")
+	}
+	for _, k := range []string{"old", "edge-lo", "edge-hi", "other-acc", "new"} {
+		if _, ok := keys[k]; !ok {
+			t.Errorf("%s 不应被清理", k)
+		}
+	}
+	if keys["live"].CacheRead != 999 || keys["live"].Account != "A" {
+		t.Errorf("已有事件应被更新为最新值并归属账号 A: %+v", keys["live"])
+	}
+}
+
+// TestMigrateV2ToV3DedupesSnapshots v2 库里同一事件的多份快照升级后合并成一行（保留 Token 最多的），并换成新的去重键。
+func TestMigrateV2ToV3DedupesSnapshots(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "v2.db")
+	old, err := sql.Open("sqlite", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`INSERT INTO kv VALUES('schema_version','2')`,
+		`CREATE TABLE cursor_events (key TEXT PRIMARY KEY, ts INTEGER NOT NULL, model TEXT NOT NULL, kind TEXT NOT NULL,
+			requests REAL NOT NULL, input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL, cache_write INTEGER NOT NULL,
+			cache_read INTEGER NOT NULL, total_cents REAL NOT NULL, charged_cents REAL NOT NULL, is_token INTEGER NOT NULL,
+			conversation_id TEXT NOT NULL, account TEXT NOT NULL DEFAULT '')`,
+		// 同一事件（相同时间/模型/会话/类型）的三份快照，Token 逐步增长
+		`INSERT INTO cursor_events VALUES('s1',1000,'m','K',1,1,1,1,100,1,4,0,'c','A')`,
+		`INSERT INTO cursor_events VALUES('s2',1000,'m','K',1,1,1,1,900,9,4,0,'c','A')`,
+		`INSERT INTO cursor_events VALUES('s3',1000,'m','K',1,1,1,1,500,5,4,0,'c','A')`,
+		// 另一个不同事件
+		`INSERT INTO cursor_events VALUES('x1',2000,'m','K',1,1,1,1,7,1,4,0,'c','A')`,
+		`CREATE TABLE deepseek_daily (date TEXT NOT NULL, model TEXT NOT NULL, currency TEXT NOT NULL, cache_hit INTEGER NOT NULL,
+			cache_miss INTEGER NOT NULL, output INTEGER NOT NULL, requests INTEGER NOT NULL, cost REAL NOT NULL, PRIMARY KEY (date, model, currency))`,
+		`CREATE TABLE snapshots (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, at INTEGER NOT NULL, payload TEXT NOT NULL)`,
+	} {
+		if _, err := old.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old.Close()
+
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, _ := s.CursorEvents(EventQuery{Account: "A"})
+	if len(got) != 2 {
+		t.Fatalf("三份快照应合并为一行，共 2 条，实际 %d", len(got))
+	}
+	for _, e := range got {
+		if e.Key != model.EventKey(e) {
+			t.Errorf("应换成新的去重键: %+v", e)
+		}
+		if e.Time.UnixMilli() == 1000 && e.CacheRead != 900 {
+			t.Errorf("应保留 Token 最多的快照: %+v", e)
+		}
+	}
+	// 之后用新键拉到的同一事件应更新这一行，而不是新增
+	again := got[0]
+	again.CacheRead += 1
+	if n, _ := s.UpsertCursorEvents([]model.CursorEvent{again}); n != 0 {
+		t.Errorf("同一事件不应再新增行: %d", n)
+	}
+	if n, _ := s.CursorEventCount("A"); n != 2 {
+		t.Errorf("总数应仍为 2: %d", n)
+	}
+}

@@ -35,7 +35,7 @@ func TestRenderScreenshots(t *testing.T) {
 		if dark {
 			suffix = "dark"
 		}
-		for _, p := range []string{PageOverview, PageCursor, PageDeepSeek} {
+		for _, p := range []string{PageOverview, PageCursor, PageDeepSeek, PageAntigravity} {
 			tt := ui.NewTester(func(c *ui.Context) { e.a.ui.page = p; e.a.panelView(c) }, PanelWidth, PanelHeight)
 			tt.SetDark(dark)
 			tt.SetScale(1)
@@ -47,7 +47,7 @@ func TestRenderScreenshots(t *testing.T) {
 		tt.SetDark(dark)
 		tt.Frame()
 		save("settings-"+suffix, tt)
-		pop := ui.NewTester(e.a.popoverView, PopoverWidth, PopoverHeight)
+		pop := ui.NewTester(e.a.popoverView, PopoverWidth, e.a.popoverHeight())
 		pop.SetDark(dark)
 		pop.Frame()
 		save("popover-"+suffix, pop)

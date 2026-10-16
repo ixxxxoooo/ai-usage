@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ixxxxoooo/ai-usage/internal/model"
+	"github.com/ixxxxoooo/ai-usage/internal/provider/antigravity"
 	"github.com/ixxxxoooo/ai-usage/internal/provider/cursor"
 	"github.com/ixxxxoooo/ai-usage/internal/provider/deepseek"
 	"github.com/ixxxxoooo/ai-usage/internal/secret"
@@ -18,12 +19,14 @@ import (
 
 // Config 是创建 Service 所需的依赖，便于测试时注入假实现。
 //
-// @author ygw
+// @author ixxxxoooo
 type Config struct {
 	Store   *store.Store
 	Secrets secret.Store
 	Cursor  *cursor.Client
 	DS      *deepseek.Client
+	// Antigravity 读取本机 Antigravity 的额度；为空使用真实实现。
+	Antigravity *antigravity.Client
 	// CursorLocalCreds 读取本机 Cursor 凭据；默认读 state.vscdb。
 	CursorLocalCreds func() (cursor.Credentials, error)
 	// ChromeTokens 扫描浏览器里的 DeepSeek token；默认扫描本机各浏览器。
@@ -42,7 +45,7 @@ type Config struct {
 
 // Service 是后台刷新与状态管理的核心。
 //
-// @author ygw
+// @author ixxxxoooo
 type Service struct {
 	cfg Config
 
@@ -74,6 +77,9 @@ func New(cfg Config) (*Service, error) {
 	}
 	if cfg.DS == nil {
 		cfg.DS = deepseek.NewClient()
+	}
+	if cfg.Antigravity == nil {
+		cfg.Antigravity = newAntigravityClient()
 	}
 	if cfg.CursorLocalCreds == nil {
 		cfg.CursorLocalCreds = func() (cursor.Credentials, error) { return cursor.ReadLocalCredentials("") }
@@ -108,6 +114,13 @@ func (s *Service) restore() {
 		s.state.Cursor.EventCount = n
 	}
 	s.state.Cursor.Status = StatusIdle
+	var aq model.AntigravityQuota
+	if ok, _ := s.cfg.Store.GetJSON("antigravity_quota", &aq); ok {
+		s.state.Antigravity.Quota, s.state.Antigravity.HasQuota = aq, true
+		s.state.Antigravity.UpdatedAt = aq.FetchedAt
+	}
+	s.state.Antigravity.Status = StatusIdle
+	s.state.Antigravity.Disabled = s.state.Settings.AntigravityOff
 	var b model.DeepSeekBalance
 	if ok, _ := s.cfg.Store.GetJSON("deepseek_balance", &b); ok {
 		s.state.DeepSeek.Balance, s.state.DeepSeek.HasBalance = b, true
@@ -174,13 +187,17 @@ func (s *Service) Settings() model.Settings { return s.State().Settings }
 // 返回值：保存错误。
 func (s *Service) UpdateSettings(st model.Settings) error {
 	st = st.Normalize()
+	wasOff := s.State().Settings.AntigravityOff
 	if err := s.cfg.Store.SaveSettings(st); err != nil {
 		return err
 	}
-	s.update(func(x *State) { x.Settings = st })
+	s.update(func(x *State) { x.Settings = st; x.Antigravity.Disabled = st.AntigravityOff })
 	select {
 	case s.cfgChange <- struct{}{}:
 	default:
+	}
+	if wasOff && !st.AntigravityOff {
+		s.Kick() // 刚打开 Antigravity 查询时立即取一次，不必等下一个周期
 	}
 	return nil
 }
@@ -244,7 +261,7 @@ func (s *Service) nextWait() time.Duration {
 	base := time.Duration(st.Settings.RefreshMinutes) * time.Minute
 	now := s.cfg.Now()
 	wait := base
-	for _, p := range []ProviderState{st.Cursor.ProviderState, st.DeepSeek.ProviderState} {
+	for _, p := range []ProviderState{st.Cursor.ProviderState, st.DeepSeek.ProviderState, st.Antigravity.ProviderState} {
 		if !p.NextTry.IsZero() {
 			if d := p.NextTry.Sub(now); d < wait {
 				wait = d // 已过期的计划视为立即（后面统一抬到最小 5 秒）
@@ -284,7 +301,7 @@ func (s *Service) RefreshManual(ctx context.Context) bool {
 	return true
 }
 
-// RefreshAll 并发刷新两个数据源；同一时刻只会有一次刷新在跑。
+// RefreshAll 并发刷新各数据源；同一时刻只会有一次刷新在跑。
 //
 // 参数 ctx：上下文。
 func (s *Service) RefreshAll(ctx context.Context) {
@@ -294,9 +311,10 @@ func (s *Service) RefreshAll(ctx context.Context) {
 	defer s.refreshMu.Unlock()
 	s.update(func(x *State) { x.Refreshing = true })
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() { defer wg.Done(); s.refreshCursor(ctx) }()
 	go func() { defer wg.Done(); s.refreshDeepSeek(ctx) }()
+	go func() { defer wg.Done(); s.refreshAntigravity(ctx) }()
 	wg.Wait()
 	s.update(func(x *State) { x.Refreshing = false })
 }
@@ -318,8 +336,8 @@ func (s *Service) applyFailure(p *ProviderState, err error) {
 		retry = rl.RetryAfter
 	}
 	base := time.Duration(s.state.Settings.RefreshMinutes) * time.Minute
-	if status == StatusNoCreds || status == StatusUnauthorized {
-		// 凭据问题短期内不会自愈，按基础间隔轮询即可（用户修复后手动刷新）
+	if status == StatusNoCreds || status == StatusUnauthorized || status == StatusNotRunning {
+		// 凭据问题短期内不会自愈、应用没运行时也不该越退越久（用户一打开就应尽快看到），按基础间隔轮询即可
 		p.NextTry = p.LastTry.Add(base)
 		return
 	}
@@ -429,8 +447,16 @@ func (s *Service) syncCursorEvents(ctx context.Context, cred cursor.Credentials,
 		}
 	}
 	save := func(since, until time.Time) string {
-		evs, err := s.cfg.Cursor.FetchEvents(ctx, cred, since, until, nil)
-		if len(evs) > 0 {
+		total := -1
+		evs, err := s.cfg.Cursor.FetchEvents(ctx, cred, since, until, func(_, t int) { total = t })
+		switch {
+		case err == nil && completeFetch(len(evs), total):
+			// 完整拉取：与远端对齐，顺带清理区间内远端已不存在的记录（历史重复、服务端修正）
+			if _, _, e := s.cfg.Store.SyncCursorEvents(cred.UserID, evs, since, until); e != nil {
+				return "保存明细失败：" + e.Error()
+			}
+		case len(evs) > 0:
+			// 拉取不完整或中途失败：只写入已拿到的，绝不删除本地数据
 			for i := range evs {
 				evs[i].Account = cred.UserID
 			}
@@ -457,6 +483,17 @@ func (s *Service) syncCursorEvents(ctx context.Context, cred cursor.Credentials,
 	return save(since, time.Time{})
 }
 
+// completeFetch 判断一次明细拉取是否完整，只有完整时才允许删除本地多余记录。
+//
+// 参数 got：拉到的条数；total：接口给出的总数（缺失为 -1）。
+// 返回值：拉到的条数不少于总数的 99.5%（容忍极少数同毫秒事件合并）且非空时为 true。
+func completeFetch(got, total int) bool {
+	if got == 0 || total < 0 {
+		return false
+	}
+	return float64(got) >= float64(total)*0.995
+}
+
 // checkCursorThresholds 在越过设定百分比时发送一次通知（同一周期同一阈值只通知一次）。
 func (s *Service) checkCursorThresholds(u model.CursorUsage) {
 	st := s.State().Settings
@@ -479,6 +516,54 @@ func (s *Service) checkCursorThresholds(u model.CursorUsage) {
 	if changed {
 		_ = s.cfg.Store.SetJSON("notified", notified)
 	}
+}
+
+// ---- Antigravity ----
+
+// refreshAntigravity 刷新 Antigravity 额度：读取本机语言服务。用户在设置里关闭后不做任何请求。
+func (s *Service) refreshAntigravity(ctx context.Context) {
+	if s.State().Settings.AntigravityOff {
+		s.update(func(x *State) { x.Antigravity.Disabled, x.Antigravity.Status = true, StatusIdle })
+		return
+	}
+	s.markLoading(func(x *State) { x.Antigravity.Status, x.Antigravity.Disabled = StatusLoading, false })
+	q, err := s.cfg.Antigravity.FetchQuota(ctx)
+	if err != nil {
+		s.update(func(x *State) { s.applyFailure(&x.Antigravity.ProviderState, err) })
+		return
+	}
+	q.FetchedAt = s.cfg.Now()
+	_ = s.cfg.Store.SetJSON("antigravity_quota", q)
+	s.update(func(x *State) {
+		x.Antigravity.Quota, x.Antigravity.HasQuota = q, true
+		s.applySuccess(&x.Antigravity.ProviderState)
+	})
+}
+
+// TestAntigravity 测试能否读到本机 Antigravity 的额度。
+//
+// 参数 ctx：上下文。
+// 返回值：成功时的说明文字，失败返回错误。
+func (s *Service) TestAntigravity(ctx context.Context) (string, error) {
+	q, err := s.cfg.Antigravity.FetchQuota(ctx)
+	if err != nil {
+		return "", err
+	}
+	n := 0
+	for _, m := range q.Models {
+		if m.HasQuota {
+			n++
+		}
+	}
+	return fmt.Sprintf("读取成功：%s，%d 个模型有额度信息", orDefault(q.Plan, "未知套餐"), n), nil
+}
+
+// orDefault 空串时返回默认值。
+func orDefault(s, d string) string {
+	if strings.TrimSpace(s) == "" {
+		return d
+	}
+	return s
 }
 
 // ---- DeepSeek ----
@@ -833,7 +918,7 @@ func (s *Service) tryOtherTokens(ctx context.Context, bad string) (string, strin
 
 // DSCandidate 是一次诊断中某个候选登录凭据的检查结果（不含 token 原文）。
 //
-// @author ygw
+// @author ixxxxoooo
 type DSCandidate struct {
 	Source string `json:"source"` // 来源，如 "Chrome / Default" 或 "钥匙串（手动粘贴）"
 	Masked string `json:"masked"` // 脱敏后的 token，如 2Cn7…03P4
@@ -844,7 +929,7 @@ type DSCandidate struct {
 
 // DSDiagnosis 是 DeepSeek 凭据诊断结果。
 //
-// @author ygw
+// @author ixxxxoooo
 type DSDiagnosis struct {
 	Mode       string        `json:"mode"`       // auto / manual
 	ScanError  string        `json:"scanError"`  // 扫描浏览器时的错误
@@ -897,3 +982,6 @@ func (s *Service) DiagnoseDeepSeek(ctx context.Context) DSDiagnosis {
 	}
 	return d
 }
+
+// newAntigravityClient 创建默认的 Antigravity 客户端；测试里可替换，避免访问开发机上真实运行的进程。
+var newAntigravityClient = antigravity.NewClient

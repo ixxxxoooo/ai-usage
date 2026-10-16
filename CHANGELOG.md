@@ -2,6 +2,24 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-10-17
+
+### 新增
+
+- **Antigravity（反重力）额度查询**：读取本机正在运行的 Antigravity 的各模型剩余额度与重置时间。浮窗新增 Antigravity 卡片，主窗口新增「Antigravity 额度」页，概览页新增额度卡片，托盘悬停提示也会带上最低剩余额度。不需要任何登录凭据，只访问本机回环接口。详见 [docs/ANTIGRAVITY.md](docs/ANTIGRAVITY.md)。
+- 设置页新增「Antigravity（反重力）」分组：可关闭查询（关闭后浮窗与面板都不再显示），并带「测试连接」。
+
+### 修复
+
+- **Cursor 明细重复、金额与官网对不上**：Cursor 一次 Agent 运行里的事件，时间戳不变但 Token 会随运行不断增长；旧版本把 Token 也算进了去重键，每分钟刷新都会把同一事件的不同时刻快照存成新行（同一秒出现十几条、Token 逐条增大），导致条数、Token、API 估值都虚高。现在去重键只用「时间 + 模型 + 会话 + 类型」，同一事件只保留一行并刷新为最新值；同步时还会清掉区间内远端已不存在的记录。详见 [docs/CURSOR_DUPLICATES.md](docs/CURSOR_DUPLICATES.md)。
+- 导入旧版本备份时，同一事件的多份快照会自动合并为一条（保留 Token 最多的）。
+- **⌘W 关不掉主窗口**：菜单栏应用本身没有菜单，⌘W 缺少承载它的菜单项（`performClose:`），按下没有任何反应。现在应用菜单补上 File > 关闭窗口（⌘W），浮窗与大面板都能用 ⌘W 关闭。
+
+### 升级注意
+
+- 数据库升级到 v3：首次启动时自动合并历史重复明细并换成新的去重键（不会丢数据，也不需要重新同步）。
+- 应用标识（bundle id）从 `com.ygw.aiusage` 改为 `com.ixxxxoooo.aiusage`（与 GitHub 账号一致）。钥匙串条目以 bundle id 为服务名，升级后首次读取已保存的凭据会自动从旧标识迁移到新标识（可能弹出一次钥匙串授权），也可以重新粘贴一次。数据仍在 `~/Library/Application Support/AI Usage`，不受影响；若之前开了「开机自启」，请在设置里重新打开一次。
+
 ## [1.1.0] - 2026-10-15
 
 ### 新增

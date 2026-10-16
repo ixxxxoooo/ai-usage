@@ -43,6 +43,7 @@ func (a *App) loadSettingsDraft() {
 		u.notifyPct[p] = true
 	}
 	u.dsBelow = s.NotifyDeepSeekBelow
+	u.agOn = !s.AntigravityOff
 	u.loginItem = a.h().getLogin()
 	u.cookieInput, u.keyInput, u.tokenInput = "", "", ""
 	a.loadSecretFlags()
@@ -73,6 +74,7 @@ func (a *App) draftSettings() model.Settings {
 		}
 	}
 	s.NotifyDeepSeekBelow = max(u.dsBelow, 0)
+	s.AntigravityOff = !u.agOn
 	return s
 }
 
@@ -185,10 +187,11 @@ func (a *App) settingsPage(c *ui.Context, st service.State) {
 	pageBody(c, "set-scroll", func() {
 		a.cursorSettings(c)
 		a.deepseekSettings(c)
+		a.antigravitySettings(c)
 		a.generalSettings(c)
 		a.notifySettings(c)
 		a.dataSettings(c, st)
-		ui.Text(c, fmt.Sprintf("AI Usage %s · © 2026 ygw", AppVersion)).FontSize(11).TextColor(c.Theme().TextMuted).Margin(8, 0, 0, 2)
+		ui.Text(c, fmt.Sprintf("AI Usage %s · © 2026 ixxxxoooo", AppVersion)).FontSize(11).TextColor(c.Theme().TextMuted).Margin(8, 0, 0, 2)
 	})
 	a.settingsDialogs(c)
 	_ = u
@@ -251,6 +254,22 @@ func (a *App) deepseekSettings(c *ui.Context) {
 		settingBlock(c, "连接状态", "", func() {
 			testLine(c, "set-test-ds", u.testingD, u.testDS, func() { a.testConnection("deepseek") })
 		})
+	})
+}
+
+// antigravitySettings Antigravity 分组：开关与连接测试。
+func (a *App) antigravitySettings(c *ui.Context) {
+	u := &a.ui
+	settingsSection(c, "Antigravity（反重力）", func() {
+		settingRow(c, "查询额度", "读取本机正在运行的 Antigravity 的模型额度，不需要任何登录凭据，也不会访问外网。关闭后浮窗与面板里不再显示", func() {
+			ui.Switch(c.Key("set-ag"), &u.agOn).Label("查询 Antigravity 额度")
+		})
+		if u.agOn {
+			ui.Divider(c)
+			settingBlock(c, "连接状态", "需要先打开 Antigravity 应用；没运行时会显示上次的数据", func() {
+				testLine(c, "set-test-ag", u.testingA, u.testAG, func() { a.testConnection("antigravity") })
+			})
+		}
 	})
 }
 

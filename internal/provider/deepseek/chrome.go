@@ -16,7 +16,7 @@ import (
 
 // ChromeToken 表示从某个 Chromium 系浏览器配置里读到的 DeepSeek 平台登录 token。
 //
-// @author ygw
+// @author ixxxxoooo
 type ChromeToken struct {
 	Browser string // 浏览器名称，如 Chrome
 	Profile string // 配置目录名，如 Default / Profile 1

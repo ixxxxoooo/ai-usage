@@ -1,6 +1,6 @@
 // Package assets 内嵌托盘图标等静态资源。
 //
-// @author ygw
+// @author ixxxxoooo
 package assets
 
 import _ "embed"

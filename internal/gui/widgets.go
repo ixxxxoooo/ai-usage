@@ -23,6 +23,14 @@ func brandDeepSeek(t *ui.Theme) ui.Color {
 	return ui.Hex("#4D6BFE")
 }
 
+// brandAntigravity 返回 Antigravity（反重力）的品牌色（随深浅色自适应）。
+func brandAntigravity(t *ui.Theme) ui.Color {
+	if t.Dark {
+		return ui.Hex("#3DD6C0")
+	}
+	return ui.Hex("#0E9F8E")
+}
+
 // toneColor 把色调名转成主题色。
 func toneColor(t *ui.Theme, tone string) ui.Color {
 	switch tone {

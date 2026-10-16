@@ -3,11 +3,12 @@
 // 本文件是「视图模型」层：把 service.State 转成界面直接展示的文案与数值，
 // 全部是纯函数，便于单元测试，也让视图代码保持简洁。
 //
-// @author ygw
+// @author ixxxxoooo
 package gui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ixxxxoooo/ai-usage/internal/model"
@@ -24,7 +25,7 @@ const (
 
 // CursorVM 是 Cursor 卡片的展示数据。
 //
-// @author ygw
+// @author ixxxxoooo
 type CursorVM struct {
 	Has         bool    // 是否有用量数据
 	Used        string  // 已用，如 "359"（老计划）或 "$16.72"（新计划）
@@ -120,7 +121,7 @@ func BuildCursorVM(s service.CursorState, now time.Time) CursorVM {
 
 // DeepSeekVM 是 DeepSeek 卡片的展示数据。
 //
-// @author ygw
+// @author ixxxxoooo
 type DeepSeekVM struct {
 	HasBalance  bool
 	Balance     string // 剩余余额，如 "¥12.61"
@@ -182,6 +183,125 @@ func BuildDeepSeekVM(s service.DeepSeekState, st model.Settings, now time.Time) 
 	return vm
 }
 
+// AntigravityPoolVM 是 Antigravity 一组共用额度的模型的展示数据。
+//
+// @author ixxxxoooo
+type AntigravityPoolVM struct {
+	Name   string  // 组名，如 "Claude / GPT-OSS"
+	Models string  // 组内模型，如 "Claude Opus 4.6 (Thinking)、GPT-OSS 120B (Medium)"
+	Remain string  // 如 "剩余 72%"
+	Frac   float64 // 已用比例 0~1
+	Level  int     // 提示级别
+	Reset  string  // 重置说明；额度充足时为 "额度充足"
+}
+
+// AntigravityModelVM 是 Antigravity 单个模型的展示数据。
+//
+// @author ixxxxoooo
+type AntigravityModelVM struct {
+	Label       string
+	Remain      string // 如 "72%"；不可用时为 "不可用"
+	Frac        float64
+	Level       int
+	Reset       string
+	Unavailable bool
+}
+
+// AntigravityVM 是 Antigravity 卡片与页面的展示数据。
+//
+// @author ixxxxoooo
+type AntigravityVM struct {
+	Disabled   bool // 用户关闭了查询，界面不显示
+	Has        bool // 是否有额度数据
+	Plan       string
+	Pools      []AntigravityPoolVM
+	Models     []AntigravityModelVM
+	Summary    string // 一句话概括，如 "最低剩余 72%（Gemini）"
+	Status     service.Status
+	StatusText string
+	Message    string
+	Updated    string
+	Stale      bool
+}
+
+// antigravityResetText 生成某个额度的重置说明。
+//
+// 剩余 100% 时服务端给的是「现在 + 滚动窗口」的占位时刻，没有意义，直接说额度充足。
+//
+// 参数 remaining：剩余比例；at：重置时刻；now：当前时间。
+// 返回值：说明文案。
+func antigravityResetText(remaining float64, at, now time.Time) string {
+	if remaining >= 0.999 {
+		return "额度充足"
+	}
+	if at.IsZero() {
+		return "重置时间未知"
+	}
+	at = at.In(now.Location())
+	left := at.Sub(now)
+	if left <= 0 {
+		return "已到重置时间"
+	}
+	clock := fmt.Sprintf("%02d:%02d", at.Hour(), at.Minute())
+	if at.YearDay() != now.YearDay() || at.Year() != now.Year() {
+		clock = fmt.Sprintf("%d/%d %s", int(at.Month()), at.Day(), clock)
+	}
+	return fmt.Sprintf("%s 重置 · 还剩 %s", clock, util.FormatCountdown(left))
+}
+
+// levelOfUsed 把已用比例转成提示级别。
+func levelOfUsed(used float64) int {
+	switch {
+	case used >= 0.95:
+		return LevelDanger
+	case used >= 0.8:
+		return LevelWarn
+	}
+	return LevelOK
+}
+
+// BuildAntigravityVM 构造 Antigravity 展示数据。
+//
+// 参数 s：Antigravity 状态；now：当前时间。
+// 返回值：AntigravityVM。
+func BuildAntigravityVM(s service.AntigravityState, now time.Time) AntigravityVM {
+	vm := AntigravityVM{
+		Disabled: s.Disabled, Has: s.HasQuota, Status: s.Status, StatusText: s.Status.StatusText(),
+		Message: s.Message, Updated: util.FormatRelative(s.UpdatedAt, now), Stale: s.Stale(),
+	}
+	if !s.HasQuota {
+		return vm
+	}
+	q := s.Quota
+	vm.Plan = q.Plan
+	for _, p := range q.Pools() {
+		used := p.Used()
+		vm.Pools = append(vm.Pools, AntigravityPoolVM{
+			Name: p.Name, Models: strings.Join(p.Labels, "、"),
+			Remain: fmt.Sprintf("剩余 %d%%", int(p.Remaining*100+0.5)),
+			Frac:   used, Level: levelOfUsed(used), Reset: antigravityResetText(p.Remaining, p.ResetAt, now),
+		})
+	}
+	for _, m := range q.Models {
+		mv := AntigravityModelVM{Label: m.Label, Frac: m.Used(), Level: levelOfUsed(m.Used())}
+		switch {
+		case m.Disabled:
+			mv.Unavailable, mv.Remain, mv.Reset = true, "不可用", "当前套餐暂不可用"
+		case !m.HasQuota:
+			mv.Remain, mv.Reset = "—", "没有额度信息"
+		default:
+			mv.Remain = fmt.Sprintf("%d%%", int(m.Remaining*100+0.5))
+			mv.Reset = antigravityResetText(m.Remaining, m.ResetAt, now)
+		}
+		vm.Models = append(vm.Models, mv)
+	}
+	if len(vm.Pools) > 0 {
+		low := vm.Pools[0]
+		vm.Summary = fmt.Sprintf("最低%s（%s）", low.Remain, low.Name)
+	}
+	return vm
+}
+
 // TrayTitle 计算托盘图标旁边显示的文字。
 //
 // 参数 st：整体状态。
@@ -223,6 +343,7 @@ func TrayTitle(st service.State) string {
 func TrayToolTip(st service.State, now time.Time) string {
 	cur := BuildCursorVM(st.Cursor, now)
 	ds := BuildDeepSeekVM(st.DeepSeek, st.Settings, now)
+	ag := BuildAntigravityVM(st.Antigravity, now)
 	out := "AI Usage"
 	if cur.Has {
 		out += fmt.Sprintf("\nCursor：%s/%s（%s）", cur.Used, cur.Limit, cur.Remain)
@@ -233,6 +354,16 @@ func TrayToolTip(st service.State, now time.Time) string {
 		out += "\nDeepSeek：余额 " + ds.Balance
 	} else {
 		out += "\nDeepSeek：" + ds.StatusText
+	}
+	if !ag.Disabled {
+		switch {
+		case ag.Has && ag.Summary != "":
+			out += "\nAntigravity：" + ag.Summary
+		case ag.Has:
+			out += "\nAntigravity：已同步"
+		default:
+			out += "\nAntigravity：" + ag.StatusText
+		}
 	}
 	return out
 }
@@ -265,7 +396,7 @@ func RefreshedText(st service.State, now time.Time) string {
 		return "正在刷新…"
 	}
 	var latest time.Time
-	for _, t := range []time.Time{st.Cursor.UpdatedAt, st.DeepSeek.UpdatedAt} {
+	for _, t := range []time.Time{st.Cursor.UpdatedAt, st.DeepSeek.UpdatedAt, st.Antigravity.UpdatedAt} {
 		if t.After(latest) {
 			latest = t
 		}
