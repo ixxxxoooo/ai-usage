@@ -127,9 +127,22 @@ const popoverInset = 13
 
 // selfTestPosition 打开浮窗并校验：水平对齐托盘图标、紧贴菜单栏下方、完整落在所在显示器内。
 func (a *App) selfTestPosition(rep *SelfTestReport, fail func(string, ...any)) {
+	// 浮窗高度随设置变化（关掉 Antigravity 查询时不留空位），必须以当前实际高度为准。
+	wantW, wantH := PopoverWidth, 0
 	onMain(func() { a.TogglePopover() })
-	time.Sleep(1200 * time.Millisecond)
+	// 托盘图标刚建好时，浮窗偶尔不会立刻出现：等一会儿，还没打开就再开一次（只在未打开时重试）。
+	for i := 0; i < 8; i++ {
+		time.Sleep(300 * time.Millisecond)
+		var open bool
+		onMain(func() { open = a.pop != nil })
+		if open {
+			break
+		}
+		onMain(func() { a.TogglePopover() })
+	}
+	time.Sleep(500 * time.Millisecond)
 	onMain(func() {
+		wantH = a.popoverHeight()
 		rep.Displays = workAreas()
 		rep.Tray = toRect(a.tray.Bounds())
 		if a.pop == nil {
@@ -139,7 +152,7 @@ func (a *App) selfTestPosition(rep *SelfTestReport, fail func(string, ...any)) {
 		rep.Popover = toRect(a.pop.Bounds())
 		p := rep.Popover
 		rep.Content = placement.Rect{X: p.X + popoverInset, Y: p.Y + popoverInset, W: p.W - 2*popoverInset, H: p.H - 2*popoverInset}
-		if exp, ok := placement.ForTray(rep.Tray, PopoverWidth, PopoverHeight, 4, rep.Displays); ok {
+		if exp, ok := placement.ForTray(rep.Tray, wantW, wantH, 4, rep.Displays); ok {
 			rep.Expected = exp
 		}
 	})
@@ -154,8 +167,8 @@ func (a *App) selfTestPosition(rep *SelfTestReport, fail func(string, ...any)) {
 	if abs(rep.Content.CenterX()-exp.CenterX()) > tol {
 		fail("浮窗水平位置偏离期望：中心 %d，期望 %d", rep.Content.CenterX(), exp.CenterX())
 	}
-	if rep.Content.W != PopoverWidth || rep.Content.H != PopoverHeight {
-		fail("浮窗内容尺寸 %dx%d 与设计的 %dx%d 不符", rep.Content.W, rep.Content.H, PopoverWidth, PopoverHeight)
+	if rep.Content.W != wantW || rep.Content.H != wantH {
+		fail("浮窗内容尺寸 %dx%d 与设计的 %dx%d 不符", rep.Content.W, rep.Content.H, wantW, wantH)
 	}
 	// 垂直：内容区顶部应紧贴托盘图标下沿（中间是箭头）。
 	if gap := rep.Content.Y - rep.Tray.Bottom(); gap < 0 || gap > 24 {
