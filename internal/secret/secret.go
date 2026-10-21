@@ -6,7 +6,6 @@ package secret
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -36,48 +35,30 @@ type Store interface {
 	Delete(key string) error
 }
 
-// legacyService 是 bundle id 从 com.ygw.aiusage 换成 GitHub 名之前，钥匙串用的服务名
-// （mygo.Secrets 以 bundle id 作服务名）。旧版本存下的凭据还在这个名字下，读到后写回新名字。
-const legacyService = "com.ygw.aiusage"
-
-// secretKeeper 是 mygo.Secrets 与 mygo.Secrets.Service(服务名) 共有的能力，便于测试注入。
+// secretKeeper 是 mygo.Secrets 的读取能力，便于测试注入。
 type secretKeeper interface {
 	Get(key string) ([]byte, error)
-	Set(key string, value []byte) error
 }
 
 // Keychain 使用 mygo.Secrets（macOS 登录钥匙串）。
 type Keychain struct{}
 
-// Get 读取钥匙串项：先看当前服务名，再看旧服务名（换 bundle id 前存的凭据）。
-func (Keychain) Get(key string) (string, error) {
-	return keychainGet(mygo.Secrets, mygo.Secrets.Service(legacyService), key)
-}
+// Get 读取钥匙串项。
+func (Keychain) Get(key string) (string, error) { return keychainGet(mygo.Secrets, key) }
 
-// keychainGet 先读 cur（当前服务名），没有就读 legacy（旧服务名）并把命中的值写回 cur，
-// 这样只需迁移一次，之后不再访问旧项。
+// keychainGet 读取钥匙串项，把 mygo 的「不存在」换成 ErrNotFound。
 //
-// 参数 cur/legacy：当前与旧服务名的钥匙串；key：凭据键名。
-// 返回值：凭据内容；都没有时返回 ErrNotFound。
-func keychainGet(cur, legacy secretKeeper, key string) (string, error) {
-	b, err := cur.Get(key)
-	if err == nil {
-		return string(b), nil
-	}
-	if !errors.Is(err, mygo.ErrSecretNotFound) {
-		return "", err
-	}
-	lb, lerr := legacy.Get(key)
+// 参数 k：钥匙串；key：凭据键名。
+// 返回值：凭据内容；没有时返回 ErrNotFound，其他错误（如被拒绝）原样返回。
+func keychainGet(k secretKeeper, key string) (string, error) {
+	b, err := k.Get(key)
 	switch {
-	case lerr == nil:
-		if serr := cur.Set(key, lb); serr != nil {
-			log.Println("凭据迁移写回失败（本次仍可用）:", key, serr)
-		}
-		return string(lb), nil
-	case errors.Is(lerr, mygo.ErrSecretNotFound):
+	case err == nil:
+		return string(b), nil
+	case errors.Is(err, mygo.ErrSecretNotFound):
 		return "", ErrNotFound
 	default:
-		return "", lerr
+		return "", err
 	}
 }
 

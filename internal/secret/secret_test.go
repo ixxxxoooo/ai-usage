@@ -39,10 +39,10 @@ func exercise(t *testing.T, s Store) {
 // TestMemory 验证内存实现。
 func TestMemory(t *testing.T) { exercise(t, NewMemory()) }
 
-// fakeKeeper 是 secretKeeper 的内存实现，用来验证旧服务名的凭据迁移。
+// fakeKeeper 是 secretKeeper 的内存实现。
 type fakeKeeper struct {
 	m    map[string]string
-	fail error // 不为空时 Get 一律返回它（模拟读不到/被拒绝）
+	fail error // 不为空时 Get 一律返回它（模拟钥匙串被拒绝）
 }
 
 // Get 读取。
@@ -57,47 +57,17 @@ func (f *fakeKeeper) Get(key string) ([]byte, error) {
 	return []byte(v), nil
 }
 
-// Set 写入。
-func (f *fakeKeeper) Set(key string, value []byte) error {
-	f.m[key] = string(value)
-	return nil
-}
-
-// TestKeychainMigratesLegacyService 换 bundle id 前存在旧服务名下的凭据，读取时应自动迁移到新服务名。
-func TestKeychainMigratesLegacyService(t *testing.T) {
-	cur := &fakeKeeper{m: map[string]string{}}
-	old := &fakeKeeper{m: map[string]string{KeyDeepSeekKey: "sk-old", "stale": "v"}}
-	got, err := keychainGet(cur, old, KeyDeepSeekKey)
-	if err != nil || got != "sk-old" {
-		t.Fatalf("应读到旧服务名的凭据: %q %v", got, err)
+// TestKeychainGet 读到凭据原样返回；没有时返回 ErrNotFound；其他错误（如被拒绝）原样上报，不伪装成没有凭据。
+func TestKeychainGet(t *testing.T) {
+	k := &fakeKeeper{m: map[string]string{KeyDeepSeekKey: "sk-1"}}
+	if v, err := keychainGet(k, KeyDeepSeekKey); err != nil || v != "sk-1" {
+		t.Errorf("应读到凭据: %q %v", v, err)
 	}
-	if cur.m[KeyDeepSeekKey] != "sk-old" {
-		t.Errorf("命中的旧凭据应写回新服务名: %v", cur.m)
-	}
-	if _, ok := cur.m["stale"]; ok {
-		t.Error("只迁移被读取的那个键")
-	}
-	// 新服务名里已有（或已迁移过）时，直接返回，不再碰旧项。
-	old.fail = errors.New("不应再访问旧服务名")
-	if v, err := keychainGet(cur, old, KeyDeepSeekKey); err != nil || v != "sk-old" {
-		t.Errorf("已有新凭据时应直接返回: %q %v", v, err)
-	}
-}
-
-// TestKeychainNotFound 新旧服务名都没有该凭据时返回 ErrNotFound。
-func TestKeychainNotFound(t *testing.T) {
-	cur := &fakeKeeper{m: map[string]string{}}
-	old := &fakeKeeper{m: map[string]string{}}
-	if _, err := keychainGet(cur, old, "missing"); !errors.Is(err, ErrNotFound) {
+	if _, err := keychainGet(k, "missing"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("应返回 ErrNotFound: %v", err)
 	}
-}
-
-// TestKeychainLegacyError 读旧服务名出错（非「不存在」）时上报该错误，而不是伪装成没有凭据。
-func TestKeychainLegacyError(t *testing.T) {
-	cur := &fakeKeeper{m: map[string]string{}}
-	old := &fakeKeeper{m: map[string]string{}, fail: errors.New("钥匙串被拒绝")}
-	if _, err := keychainGet(cur, old, "k"); err == nil || errors.Is(err, ErrNotFound) {
+	k.fail = errors.New("钥匙串被拒绝")
+	if _, err := keychainGet(k, KeyDeepSeekKey); err == nil || errors.Is(err, ErrNotFound) {
 		t.Errorf("应上报真实错误: %v", err)
 	}
 }

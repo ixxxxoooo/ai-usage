@@ -2,6 +2,16 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.1] - 2026-10-21
+
+### 变更
+
+- 作者信息统一为 GitHub 账号 ixxxxoooo，移除旧作者标识的残留：不再从旧 bundle id 的钥匙串条目迁移凭据。
+
+### 升级注意
+
+- 从 1.2.0 / 1.3.0 升级不受影响（凭据早已迁移到新标识）。从 1.1.0 及更早版本直接升级时，需要在设置里重新粘贴一次 Cookie / API Key / token。
+
 ## [1.3.0] - 2026-10-21
 
 ### 新增
@@ -30,7 +40,7 @@
 ### 升级注意
 
 - 数据库升级到 v3：首次启动时自动合并历史重复明细并换成新的去重键（不会丢数据，也不需要重新同步）。
-- 应用标识（bundle id）从 `com.ygw.aiusage` 改为 `com.ixxxxoooo.aiusage`（与 GitHub 账号一致）。钥匙串条目以 bundle id 为服务名，升级后首次读取已保存的凭据会自动从旧标识迁移到新标识（可能弹出一次钥匙串授权），也可以重新粘贴一次。数据仍在 `~/Library/Application Support/AI Usage`，不受影响；若之前开了「开机自启」，请在设置里重新打开一次。
+- 应用标识（bundle id）改为 `com.ixxxxoooo.aiusage`（与 GitHub 账号一致）。钥匙串条目以 bundle id 为服务名，如果升级后凭据显示未保存，请在设置里重新粘贴一次。数据仍在 `~/Library/Application Support/AI Usage`，不受影响；若之前开了「开机自启」，请在设置里重新打开一次。
 
 ## [1.1.0] - 2026-10-15
 
