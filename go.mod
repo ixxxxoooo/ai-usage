@@ -5,7 +5,7 @@ go 1.27.2
 tool github.com/egoist/mygo/cmd/mygo
 
 require (
-	github.com/egoist/mygo v0.4.9-0.20261014114409-f2eca9f74533
+	github.com/egoist/mygo v0.5.5
 	github.com/syndtr/goleveldb v1.0.0
 	modernc.org/sqlite v1.60.1
 )
