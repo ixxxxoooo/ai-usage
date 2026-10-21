@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/ui"
 	"github.com/ixxxxoooo/ai-usage/internal/model"
 	"github.com/ixxxxoooo/ai-usage/internal/secret"
@@ -290,6 +291,21 @@ func (a *App) generalSettings(c *ui.Context) {
 				a.setLoginItem(u.loginItem)
 			}
 		})
+		if a.updates {
+			ui.Divider(c)
+			settingRow(c, "自动检查更新", "每 6 小时在后台检查一次 GitHub 上的新版本", func() {
+				on := updater.AutomaticChecks()
+				if ui.Switch(c.Key("set-autoupdate"), &on).Label("自动检查更新").Changed() {
+					updater.SetAutomaticChecks(on)
+				}
+			})
+			ui.Divider(c)
+			settingRow(c, "软件更新", updateDesc(a.updateCan, updater.LastCheck()), func() {
+				if ui.Button(c.Key("set-checkupdate"), "检查更新").Clicked() {
+					a.CheckForUpdates()
+				}
+			})
+		}
 	})
 }
 

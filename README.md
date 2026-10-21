@@ -63,6 +63,7 @@
    - 在「应用程序」里 **右键 → 打开 → 打开**；
    - 或在终端执行：`xattr -dr com.apple.quarantine "/Applications/AI Usage.app"`。
 4. 校验下载（可选）：`shasum -a 256 -c SHA256SUMS`（`SHA256SUMS` 在同一个 Release 里）。
+5. 之后的新版本会**自动提示更新**（1.3.0 起，托盘右键也可「检查更新…」），详见 [docs/UPDATES.md](docs/UPDATES.md)。
 
 > 系统要求：macOS 13 Ventura 或更新。
 

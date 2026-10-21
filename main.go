@@ -61,6 +61,9 @@ func run() error {
 	}
 
 	app := gui.New()
+	if self.mode == "" {
+		app.EnableUpdates() // 自检模式不检查更新，免得弹窗打断 E2E
+	}
 	svc, err := service.New(service.Config{
 		Store: st, Secrets: secrets,
 		OnChange: app.OnChange, Notify: app.Notify,

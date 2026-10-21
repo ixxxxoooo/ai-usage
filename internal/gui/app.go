@@ -56,6 +56,9 @@ type App struct {
 	ui    uiState
 	hk    hooks // 可替换的外部交互（文件对话框、异步执行），测试时注入
 
+	updates   bool // 已启用自动更新（EnableUpdates）
+	updateCan bool // 当前安装位置可以自动更新
+
 	// 供 onChange 在其他 goroutine 里安全读取窗口指针。
 	winMu sync.Mutex
 	wins  []*mygo.Window
@@ -249,13 +252,14 @@ func (a *App) showTrayMenu() {
 	if a.pop != nil {
 		a.pop.Close()
 	}
-	menu := mygo.NewMenu([]*mygo.MenuItem{
+	items := []*mygo.MenuItem{
 		{Label: "打开面板", Click: func(*mygo.MenuItem, *mygo.Window) { a.OpenPanel(PageOverview) }},
 		{Label: "立即刷新", Click: func(*mygo.MenuItem, *mygo.Window) { a.RefreshNow() }},
 		{Label: "设置…", Accelerator: "CmdOrCtrl+,", Click: func(*mygo.MenuItem, *mygo.Window) { a.OpenPanel(PageSettings) }},
-		mygo.Separator(),
-		{Role: mygo.RoleQuit, Label: "退出 AI Usage"},
-	})
+	}
+	items = append(items, a.updateMenuItems()...)
+	items = append(items, mygo.Separator(), &mygo.MenuItem{Role: mygo.RoleQuit, Label: "退出 AI Usage"})
+	menu := mygo.NewMenu(items)
 	a.tray.SetMenu(menu)
 	defer a.tray.SetMenu(nil)
 	a.tray.PopUpMenu()

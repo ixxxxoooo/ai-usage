@@ -12,6 +12,10 @@ jobs:
   ci:
     name: 测试与构建
     uses: ./.github/workflows/ci.yml
+    with:
+      sign: true
+    secrets:
+      MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
 
   publish:
     name: 发布到 GitHub Release
@@ -41,7 +45,9 @@ jobs:
       - name: 生成构建来源证明
         uses: actions/attest-build-provenance@v4
         with:
-          subject-path: dist/AI-Usage-*.dmg
+          subject-path: |
+            dist/AI-Usage-*.dmg
+            dist/*.tar.gz
       - name: 生成发布说明
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -72,5 +78,6 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           PRE=""
           case "$VERSION" in *-*) PRE="--prerelease";; esac
-          gh release create "$GITHUB_REF_NAME" dist/AI-Usage-*.dmg dist/SHA256SUMS \
+          # 正式版会成为 latest：已安装的应用从 releases/latest/download/update-darwin-universal.json 检查更新
+          gh release create "$GITHUB_REF_NAME" dist/* \
             --title "AI Usage ${GITHUB_REF_NAME}" --notes-file notes.md --verify-tag $PRE

@@ -8,6 +8,14 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      sign:
+        description: 用更新私钥签名并生成自动更新文件（发布时开启）
+        type: boolean
+        default: false
+    secrets:
+      MYGO_UPDATER_PRIVATE_KEY:
+        required: false
     outputs:
       version:
         description: 构建出的版本号（来自 mygo.json）
@@ -59,14 +67,27 @@ jobs:
         id: meta
         run: echo "version=$(jq -r .version mygo.json)" >> "$GITHUB_OUTPUT"
       - name: 构建通用（Intel + Apple 芯片）.app 与 .dmg
-        run: go tool mygo build -platform darwin/universal
+        env:
+          # 只有发布时才签名：生成自动更新的归档、增量包与清单（update-darwin-universal.json）
+          MYGO_UPDATER_PRIVATE_KEY: ${{ inputs.sign && secrets.MYGO_UPDATER_PRIVATE_KEY || '' }}
+        run: |
+          if [ "${{ inputs.sign }}" = "true" ] && [ -z "$MYGO_UPDATER_PRIVATE_KEY" ]; then
+            echo "::error::发布需要仓库 Secret MYGO_UPDATER_PRIVATE_KEY（mygo keygen 生成的 mygo-update.key）"; exit 1
+          fi
+          go tool mygo build -platform darwin/universal
       - name: 整理产物并生成校验和
         run: |
           set -euo pipefail
           VERSION="${{ steps.meta.outputs.version }}"
           mkdir -p dist
           cp "build/darwin-universal/AI Usage ${VERSION}.dmg" "dist/AI-Usage-${VERSION}.dmg"
-          (cd dist && shasum -a 256 "AI-Usage-${VERSION}.dmg" > SHA256SUMS && cat SHA256SUMS)
+          if [ "${{ inputs.sign }}" = "true" ]; then
+            # 自动更新文件：文件名已是 slug（无空格），直接作为 Release 附件
+            cp build/darwin-universal/*.tar.gz build/darwin-universal/update-darwin-universal.json dist/
+            cp build/darwin-universal/*.delta dist/ 2>/dev/null || true
+            jq -e --arg v "$VERSION" '.version == $v and (.signature | length > 0)' dist/update-darwin-universal.json
+          fi
+          (cd dist && shopt -s nullglob && shasum -a 256 AI-Usage-*.dmg *.tar.gz *.delta > SHA256SUMS && cat SHA256SUMS)
       - name: 验证 DMG 与应用包
         run: |
           set -euo pipefail
